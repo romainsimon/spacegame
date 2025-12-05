@@ -1,0 +1,10 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { Suspense } from 'react';
+import { OrbitControls, Stars } from '@react-three/drei';
+import { Canvas } from '@react-three/fiber';
+import { Physics } from '@react-three/cannon';
+import { LaunchPad } from './LaunchPad';
+import { LightingRig } from './LightingRig';
+import { Planet } from './Planet';
+import { Rocket } from './Rocket';
+export const SpaceScene = () => (_jsxs(Canvas, { shadows: true, dpr: [1, 2], camera: { position: [35, 25, 45], fov: 45, near: 0.1, far: 1000 }, children: [_jsx("color", { attach: "background", args: [0.015, 0.02, 0.05] }), _jsx("fog", { attach: "fog", args: [0x05060a, 80, 260] }), _jsxs(Suspense, { fallback: null, children: [_jsx(Planet, {}), _jsxs(Physics, { gravity: [0, -9.81, 0], allowSleep: false, iterations: 12, broadphase: "SAP", children: [_jsx(LaunchPad, {}), _jsx(Rocket, {})] })] }), _jsx(LightingRig, {}), _jsx(Stars, { radius: 400, depth: 60, count: 7000, factor: 6, saturation: 0, fade: true, speed: 0.5 }), _jsx(OrbitControls, { maxPolarAngle: Math.PI / 2.1, minDistance: 15, maxDistance: 200, enablePan: false })] }));

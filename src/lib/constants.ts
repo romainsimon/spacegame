@@ -1,0 +1,14 @@
+const now = new Date();
+export const BUILD_ID = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+export const PLANET_RADIUS_METERS = 6_371_000;
+export const PLANET_RADIUS_UNITS = 80;
+export const METERS_PER_UNIT = PLANET_RADIUS_METERS / PLANET_RADIUS_UNITS;
+export const STANDARD_GRAVITY = 9.81;
+export const STANDARD_GRAV_PARAM = 3.986004418e14; // m^3 / s^2
+
+export const MAX_THRUST = 1.6e6;
+export const FUEL_BURN_RATE = 0.12; // percent of tank per second at full throttle
+export const ROCKET_DRY_MASS = 2.6e4; // kg (stylized)
+
+export const HANGAR_NAME = 'Voyager Assembly Bay';
