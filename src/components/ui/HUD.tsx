@@ -1,7 +1,9 @@
 import { formatDistance, formatPercent, formatVelocity } from '@/lib/formatters';
 import { useSimulationStore } from '@/state/useSimulationStore';
 
+import { FlightSettingsPanel } from './FlightSettingsPanel';
 import { MusicController } from './MusicController';
+import { Navball } from './Navball';
 
 const controls = [
   { key: 'W / ↑', action: 'Increase throttle' },
@@ -17,14 +19,17 @@ export const HUD = () => {
 
   return (
     <>
-      <div className="panel telemetry-panel">
-        <div className="telemetry-grid">
-          <TelemetryCell label="Altitude" value={formatDistance(telemetry.altitude)} />
-          <TelemetryCell label="Velocity" value={formatVelocity(telemetry.velocity)} />
-          <TelemetryCell label="Apoapsis" value={formatDistance(telemetry.apoapsis)} />
-          <TelemetryCell label="Periapsis" value={formatDistance(telemetry.periapsis)} />
-          <TelemetryCell label="Fuel" value={formatPercent(fuel)} />
+      <div className="top-row">
+        <div className="panel telemetry-panel">
+          <div className="telemetry-grid">
+            <TelemetryCell label="Altitude" value={formatDistance(telemetry.altitude)} />
+            <TelemetryCell label="Velocity" value={formatVelocity(telemetry.velocity)} />
+            <TelemetryCell label="Apoapsis" value={formatDistance(telemetry.apoapsis)} />
+            <TelemetryCell label="Periapsis" value={formatDistance(telemetry.periapsis)} />
+            <TelemetryCell label="Fuel" value={formatPercent(fuel)} />
+          </div>
         </div>
+        <Navball />
       </div>
 
       <div className="bottom-row">
@@ -50,6 +55,7 @@ export const HUD = () => {
             ))}
           </div>
         </div>
+        <FlightSettingsPanel />
         <MusicController />
       </div>
     </>

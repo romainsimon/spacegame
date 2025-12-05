@@ -69,6 +69,13 @@ body {
   padding: 1.5rem;
 }
 
+.top-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
 .telemetry-panel {
   max-width: 640px;
 }
@@ -113,6 +120,13 @@ body {
   flex-direction: column;
   gap: 0.75rem;
   min-width: 320px;
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 220px;
 }
 
 .slider {
@@ -164,6 +178,127 @@ body {
 
 .music-panel button {
   align-self: flex-start;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.chip {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 0.45rem 1rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  transition: all 0.2s ease;
+}
+
+.chip.active {
+  background: linear-gradient(120deg, #52ffa8, #2fc3ff);
+  color: #031018;
+  border-color: transparent;
+  box-shadow: 0 6px 20px rgba(47, 195, 255, 0.35);
+}
+
+.thrust-meter {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.thrust-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff9f4a, #ffd86f);
+  transition: width 0.15s ease-out;
+}
+
+.thrust-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.6rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.navball-panel {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  min-width: 260px;
+  flex: 1;
+}
+
+.navball {
+  position: relative;
+  width: 170px;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: radial-gradient(circle at 40% 30%, #415bff, #0a1640 70%);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.45);
+}
+
+.navball-horizon {
+  position: absolute;
+  top: 0;
+  left: -20%;
+  width: 140%;
+  height: 200%;
+  background: linear-gradient(180deg, rgba(255, 120, 73, 0.85) 49%, rgba(65, 100, 220, 0.85) 51%);
+  opacity: 0.85;
+  transition: transform 0.12s ease-out;
+}
+
+.navball-heading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+  color: white;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+.navball-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: white;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+}
+
+.navball-readouts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.navball-readouts label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.navball-readouts span {
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .loader-overlay {
