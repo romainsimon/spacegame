@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { useBox } from '@react-three/cannon';
-import { useFBX } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
-import { Euler, Group, MathUtils, Mesh, Quaternion, Vector3 } from 'three';
+import { Euler, Group, MathUtils, Quaternion, Vector3 } from 'three';
 
 import { useRocketInput } from '@/hooks/useRocketInput';
-import { FUEL_BURN_RATE, MAX_THRUST, METERS_PER_UNIT } from '@/lib/constants';
+import { FUEL_BURN_RATE, METERS_PER_UNIT } from '@/lib/constants';
+import { Blueprint } from '@/lib/rocketParts';
+import { RocketVisual } from '@/components/canvas/RocketVisual';
 import { estimateOrbitalParameters } from '@/lib/orbits';
 import { useSimulationStore } from '@/state/useSimulationStore';
 
@@ -14,37 +15,37 @@ const tempVector = new Vector3();
 const tempQuaternion = new Quaternion();
 const tempEuler = new Euler();
 
-const useRocketModel = () => {
-  const fbx = useFBX('/3d/soyuz/Soyuz_TMA.fbx');
-  return useMemo(() => {
-    const clone = fbx.clone(true);
-    clone.traverse((child) => {
-      if ((child as Mesh).isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    return clone;
-  }, [fbx]);
+type RocketProps = {
+  blueprint: Blueprint;
 };
 
-export const Rocket = () => {
-  const rocketScene = useRocketModel();
+export const Rocket = ({ blueprint }: RocketProps) => {
   const consumeFuel = useSimulationStore((state) => state.consumeFuel);
   const setTelemetry = useSimulationStore((state) => state.setTelemetry);
   const setAttitude = useSimulationStore((state) => state.setAttitude);
   const setThrustPower = useSimulationStore((state) => state.setThrustPower);
+  const setCameraTarget = useSimulationStore((state) => state.setCameraTarget);
+
+  const maxThrust = blueprint.maxThrust || 1_000_000;
+  const dryMass = Math.max(10_000, blueprint.dryMass || 26_000);
+  const hullHeight = Math.max(blueprint.height, 8);
+  const hullRadius = Math.max(blueprint.maxRadius + 0.4, 1.1);
+  const spawnHeight = hullHeight / 2 + 2;
 
   const velocityRef = useRef<[number, number, number]>([0, 0, 0]);
   const smoothedThrottleRef = useRef(0);
 
-  const [ref, api] = useBox<Group>(() => ({
-    args: [2, 10, 2],
-    mass: 26_000,
-    position: [0, 8, 0],
-    angularDamping: 0.7,
-    linearDamping: 0.08,
-  }));
+  const [ref, api] = useBox<Group>(
+    () => ({
+      args: [hullRadius * 2, hullHeight, hullRadius * 2],
+      mass: dryMass,
+      position: [0, spawnHeight, 0],
+      angularDamping: 0.7,
+      linearDamping: 0.08,
+    }),
+    undefined,
+    [hullRadius, hullHeight, dryMass, blueprint.signature]
+  );
 
   useEffect(() => {
     const unsubscribe = api.velocity.subscribe((velocity) => {
@@ -66,10 +67,10 @@ export const Rocket = () => {
     );
     const thrustPower = smoothedThrottleRef.current;
     setThrustPower(thrustPower);
-    const thrust = thrustPower * MAX_THRUST;
+    const thrust = thrustPower * maxThrust;
 
     if (thrust > 0) {
-      api.applyForce([0, thrust, 0], [0, -4, 0]);
+      api.applyForce([0, thrust, 0], [0, -hullHeight / 2, 0]);
       consumeFuel(delta * thrustPower * FUEL_BURN_RATE);
     }
 
@@ -93,6 +94,8 @@ export const Rocket = () => {
       periapsis,
     });
 
+    setCameraTarget([worldPosition.x, worldPosition.y, worldPosition.z]);
+
     const worldQuaternion = ref.current?.getWorldQuaternion(tempQuaternion);
     if (worldQuaternion) {
       tempEuler.setFromQuaternion(worldQuaternion, 'YXZ');
@@ -106,20 +109,18 @@ export const Rocket = () => {
 
   return (
     <group ref={ref} dispose={null}>
-      <primitive object={rocketScene} scale={0.015} position={[0, -6, 0]} />
-      <EnginePlume />
+      <RocketVisual sections={blueprint.sections} mode="centered" />
+      <EnginePlume rocketHeight={blueprint.height} />
     </group>
   );
 };
 
-const EnginePlume = () => {
+const EnginePlume = ({ rocketHeight }: { rocketHeight: number }) => {
   const thrustPower = useSimulationStore((state) => state.thrustPower);
   return (
-    <mesh position={[0, -10.5, 0]} rotation={[Math.PI, 0, 0]}>
-      <coneGeometry args={[0.8, 4, 32, 1, true]} />
+    <mesh position={[0, -rocketHeight / 2 - 1.2, 0]} rotation={[Math.PI, 0, 0]}>
+      <coneGeometry args={[0.9, 5, 32, 1, true]} />
       <meshBasicMaterial color="#ffb347" transparent opacity={0.25 + thrustPower * 0.55} />
     </mesh>
   );
 };
-
-useFBX.preload('/3d/soyuz/Soyuz_TMA.fbx');

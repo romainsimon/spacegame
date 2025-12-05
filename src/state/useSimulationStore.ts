@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { clamp } from '@/lib/math';
+import { Blueprint, DEFAULT_BLUEPRINT } from '@/lib/rocketParts';
 
 export type Telemetry = {
   altitude: number;
@@ -25,6 +26,8 @@ type SimulationState = {
   telemetry: Telemetry;
   attitude: Attitude;
   stabilityAssist: boolean;
+  blueprint: Blueprint;
+  cameraTarget: [number, number, number];
   setPhase: (phase: Phase) => void;
   setThrottle: (value: number) => void;
   nudgeThrottle: (delta: number) => void;
@@ -33,6 +36,8 @@ type SimulationState = {
   setAttitude: (attitude: Partial<Attitude>) => void;
   setStabilityAssist: (value: boolean) => void;
   toggleStabilityAssist: () => void;
+  setBlueprint: (blueprint: Blueprint) => void;
+  setCameraTarget: (target: [number, number, number]) => void;
   consumeFuel: (amount: number) => void;
   refill: () => void;
 };
@@ -54,10 +59,12 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   throttle: 0,
   thrustPower: 0,
   fuel: 1,
-  phase: 'launch',
+  phase: 'hangar',
   telemetry: initialTelemetry,
   attitude: initialAttitude,
   stabilityAssist: true,
+  blueprint: DEFAULT_BLUEPRINT,
+  cameraTarget: [0, 8, 0],
   setPhase: (phase) => set({ phase }),
   setThrottle: (value) => set({ throttle: clamp(value) }),
   nudgeThrottle: (delta) => set((state) => ({ throttle: clamp(state.throttle + delta) })),
@@ -66,6 +73,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   setAttitude: (attitude) => set((state) => ({ attitude: { ...state.attitude, ...attitude } })),
   setStabilityAssist: (value) => set({ stabilityAssist: value }),
   toggleStabilityAssist: () => set((state) => ({ stabilityAssist: !state.stabilityAssist })),
+  setBlueprint: (blueprint) => set({ blueprint }),
+  setCameraTarget: (target) => set({ cameraTarget: target }),
   consumeFuel: (amount) =>
     set((state) => ({ fuel: Math.max(0, state.fuel - Math.abs(amount)) })),
   refill: () => set({ fuel: 1 }),
