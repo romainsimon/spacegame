@@ -164,11 +164,17 @@ const showPrompt = computed(() => {
 })
 
 const promptText = computed(() => {
-  const action = isMobile.value ? 'TAP' : 'PRESS SPACE'
-  if (state.value.phase === 'pre-launch' && !audioStarted.value) return `${action} TO START`
-  if (state.value.phase === 'pre-launch' && !started.value) return `${action} TO BEGIN COUNTDOWN`
-  if (state.value.phase === 'pre-launch') return `${action} TO LAUNCH`
-  if (state.value.activeEvent) return `${action} \u2014 ${state.value.activeEvent.label}`
+  if (isMobile.value) {
+    if (state.value.phase === 'pre-launch' && !audioStarted.value) return 'READY TO LAUNCH'
+    if (state.value.phase === 'pre-launch' && !started.value) return 'BEGIN COUNTDOWN'
+    if (state.value.phase === 'pre-launch') return 'LAUNCH'
+    if (state.value.activeEvent) return state.value.activeEvent.label
+    return ''
+  }
+  if (state.value.phase === 'pre-launch' && !audioStarted.value) return 'PRESS SPACE TO START'
+  if (state.value.phase === 'pre-launch' && !started.value) return 'PRESS SPACE TO BEGIN COUNTDOWN'
+  if (state.value.phase === 'pre-launch') return 'PRESS SPACE TO LAUNCH'
+  if (state.value.activeEvent) return `PRESS SPACE \u2014 ${state.value.activeEvent.label}`
   return ''
 })
 
