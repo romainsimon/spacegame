@@ -1237,27 +1237,49 @@ export function useRenderer() {
       // Dual viewport — no bloom in split mode
       const w = containerWidth
       const h = containerHeight
+      const isMobile = w <= 768
       const gap = 4
-      const halfW = Math.floor((w - gap) / 2)
 
       renderer.setScissorTest(true)
       renderer.autoClear = false
       renderer.setClearColor(0x000000)
       renderer.clear()
 
-      // Left — Stage 1
-      renderer.setViewport(0, 0, halfW, h)
-      renderer.setScissor(0, 0, halfW, h)
-      stage1Camera.aspect = halfW / h
-      stage1Camera.updateProjectionMatrix()
-      renderer.render(scene, stage1Camera)
+      if (isMobile) {
+        // Mobile: top/bottom split
+        const halfH = Math.floor((h - gap) / 2)
 
-      // Right — Stage 2
-      renderer.setViewport(halfW + gap, 0, halfW, h)
-      renderer.setScissor(halfW + gap, 0, halfW, h)
-      camera.aspect = halfW / h
-      camera.updateProjectionMatrix()
-      renderer.render(scene, camera)
+        // Top — Stage 1
+        renderer.setViewport(0, halfH + gap, w, halfH)
+        renderer.setScissor(0, halfH + gap, w, halfH)
+        stage1Camera.aspect = w / halfH
+        stage1Camera.updateProjectionMatrix()
+        renderer.render(scene, stage1Camera)
+
+        // Bottom — Stage 2
+        renderer.setViewport(0, 0, w, halfH)
+        renderer.setScissor(0, 0, w, halfH)
+        camera.aspect = w / halfH
+        camera.updateProjectionMatrix()
+        renderer.render(scene, camera)
+      } else {
+        // Desktop: left/right split
+        const halfW = Math.floor((w - gap) / 2)
+
+        // Left — Stage 1
+        renderer.setViewport(0, 0, halfW, h)
+        renderer.setScissor(0, 0, halfW, h)
+        stage1Camera.aspect = halfW / h
+        stage1Camera.updateProjectionMatrix()
+        renderer.render(scene, stage1Camera)
+
+        // Right — Stage 2
+        renderer.setViewport(halfW + gap, 0, halfW, h)
+        renderer.setScissor(halfW + gap, 0, halfW, h)
+        camera.aspect = halfW / h
+        camera.updateProjectionMatrix()
+        renderer.render(scene, camera)
+      }
 
       renderer.autoClear = true
       renderer.setScissorTest(false)

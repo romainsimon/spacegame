@@ -217,13 +217,26 @@ function toggleFastForward() {
   }
 }
 
+// Credits
+const showCredits = ref(false)
+const pausedForCredits = ref(false)
+
+function toggleCredits() {
+  showCredits.value = !showCredits.value
+  if (showCredits.value) {
+    pausedForCredits.value = true
+  } else {
+    pausedForCredits.value = false
+  }
+}
+
 // Game loop
 function gameLoop(timestamp: number) {
   if (!isInitialized.value) return
 
   const rawDt = lastTime.value === 0 ? 0.016 : Math.min((timestamp - lastTime.value) / 1000, 0.05)
   lastTime.value = timestamp
-  const dt = rawDt * timeScale.value
+  const dt = pausedForCredits.value ? 0 : rawDt * timeScale.value
 
   // Auto-stop fast forward at target or on terminal/input states
   if (timeScale.value > 1) {
@@ -521,11 +534,52 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- Credits button -->
+    <div class="credits-btn" @click="toggleCredits">CREDITS</div>
+
     <!-- Mute indicator -->
-    <div class="mute-indicator" :class="{ muted: isMuted }">
+    <div class="mute-indicator" :class="{ muted: isMuted }" @click="isMuted = audio.toggleMute()">
       <span v-if="isMuted">MUTED</span>
-      <span v-else-if="audioStarted">M TO MUTE</span>
+      <span v-else-if="audioStarted">{{ isMobile ? 'MUTE' : 'M TO MUTE' }}</span>
     </div>
+
+    <!-- Credits overlay -->
+    <Transition name="fade">
+      <div v-if="showCredits" class="credits-overlay" @click="toggleCredits">
+        <div class="credits-content" @click.stop>
+          <div class="credits-title">CREDITS</div>
+          <div class="credits-section">
+            <div class="credits-label">CREATED BY</div>
+            <div class="credits-value">
+              <a href="https://x.com/romainsimon" target="_blank" rel="noopener">Romain Simon</a>
+              &middot;
+              <a href="https://romainsimon.com" target="_blank" rel="noopener">romainsimon.com</a>
+            </div>
+          </div>
+          <div class="credits-section">
+            <div class="credits-label">BUILT WITH</div>
+            <div class="credits-value">100% vibecoded using <a href="https://claude.ai/claude-code" target="_blank" rel="noopener">Claude Code</a></div>
+          </div>
+          <div class="credits-section">
+            <div class="credits-label">3D MODEL</div>
+            <div class="credits-value">
+              <a href="https://sketchfab.com/3d-models/falcon-9-launching-pad-e957a9dbb45146e0946e16f2cb12c827" target="_blank" rel="noopener">Falcon 9 Launching Pad</a>
+              by Aashish_3D
+            </div>
+            <div class="credits-note">Licensed under CC Attribution</div>
+          </div>
+          <div class="credits-section">
+            <div class="credits-label">MUSIC & SOUND EFFECTS</div>
+            <div class="credits-value">Generated using ElevenLabs</div>
+          </div>
+          <div class="credits-section">
+            <div class="credits-label">DISCLAIMER</div>
+            <div class="credits-value">This is a fan project. SpaceX, Falcon 9, and all related names and imagery are trademarks of Space Exploration Technologies Corp.</div>
+          </div>
+          <div class="credits-close" @click="toggleCredits">CLOSE</div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- Event prompt -->
     <Transition name="prompt">
@@ -878,15 +932,112 @@ onUnmounted(() => {
   filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.6));
 }
 
+/* === CREDITS BUTTON === */
+.credits-btn {
+  position: absolute;
+  top: 12px;
+  left: 16px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  color: rgba(255, 255, 255, 0.8);
+  z-index: 10;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.credits-btn:hover {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* === CREDITS OVERLAY === */
+.credits-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(20px);
+  z-index: 100;
+}
+
+.credits-content {
+  text-align: center;
+  max-width: 460px;
+  padding: 0 24px;
+}
+
+.credits-title {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--spacex-text);
+  margin-bottom: 32px;
+}
+
+.credits-section {
+  margin-bottom: 20px;
+}
+
+.credits-label {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--spacex-dim);
+  margin-bottom: 4px;
+}
+
+.credits-value {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--spacex-text);
+  line-height: 1.5;
+}
+
+.credits-value a {
+  color: var(--spacex-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: rgba(255, 255, 255, 0.3);
+}
+
+.credits-value a:hover {
+  text-decoration-color: rgba(255, 255, 255, 0.8);
+}
+
+.credits-note {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--spacex-dim);
+  margin-top: 2px;
+}
+
+.credits-close {
+  margin-top: 32px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  color: var(--spacex-dim);
+  cursor: pointer;
+  animation: pulse-opacity 2s ease-in-out infinite;
+}
+
+.credits-close:hover {
+  color: var(--spacex-text);
+}
+
 /* === MUTE === */
 .mute-indicator {
   position: absolute;
   top: 12px;
   right: 16px;
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: 0.75rem;
   letter-spacing: 0.15em;
-  color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.8);
   z-index: 10;
   pointer-events: none;
 }
@@ -1145,11 +1296,21 @@ onUnmounted(() => {
   }
 
   .split-divider {
-    height: calc(100% - 200px);
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    width: 100%;
+    height: 4px;
+  }
+
+  .credits-btn {
+    padding: 8px 12px;
   }
 
   .mute-indicator {
-    display: none;
+    pointer-events: auto;
+    cursor: pointer;
+    padding: 8px 12px;
   }
 }
 </style>
