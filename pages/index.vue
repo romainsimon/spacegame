@@ -20,10 +20,12 @@ const ffTarget = ref<number | null>(null)
 const orbitReached = ref(false)
 let orbitTimer: ReturnType<typeof setTimeout> | null = null
 
-// Mobile / touch detection
+// Mobile detection (synced with CSS breakpoint)
 const isMobile = ref(false)
-if (typeof window !== 'undefined') {
-  isMobile.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+function checkMobile() {
+  if (typeof window !== 'undefined') {
+    isMobile.value = window.matchMedia('(max-width: 768px)').matches
+  }
 }
 
 // Mission timeline milestones (evenly spaced visually)
@@ -162,7 +164,7 @@ const showPrompt = computed(() => {
 })
 
 const promptText = computed(() => {
-  const action = isMobile.value ? 'PRESS' : 'PRESS SPACE'
+  const action = isMobile.value ? 'TAP' : 'PRESS SPACE'
   if (state.value.phase === 'pre-launch' && !audioStarted.value) return `${action} TO START`
   if (state.value.phase === 'pre-launch' && !started.value) return `${action} TO BEGIN COUNTDOWN`
   if (state.value.phase === 'pre-launch') return `${action} TO LAUNCH`
@@ -328,6 +330,9 @@ function restart() {
 onMounted(() => {
   if (!containerRef.value) return
 
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+
   renderer.init(containerRef.value)
   isInitialized.value = true
 
@@ -338,6 +343,7 @@ onMounted(() => {
 onUnmounted(() => {
   isInitialized.value = false
   if (orbitTimer) { clearTimeout(orbitTimer); orbitTimer = null }
+  window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', onKeyDown)
   renderer.dispose()
   audio.dispose()
@@ -746,6 +752,8 @@ onUnmounted(() => {
 
 .milestone {
   position: absolute;
+  top: 0;
+  bottom: 0;
   transform: translateX(-50%);
 }
 
@@ -1045,88 +1053,79 @@ onUnmounted(() => {
 /* === MOBILE LAYOUT === */
 @media (max-width: 768px) {
   .hud {
-    flex-direction: column;
-    padding: 16px 12px 8px;
-    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 8px 8px 6px;
+    gap: 2px;
   }
 
+  /* Timeline + clock: full width, first row */
   .hud-center {
     order: -1;
+    flex: 0 0 100%;
     padding: 0;
-    width: 100%;
   }
 
+  /* Left + right gauges share second row */
   .hud-left,
   .hud-right {
-    gap: 4px;
-  }
-
-  .hud-left {
-    order: 0;
-  }
-
-  .hud-right {
-    order: 1;
-  }
-
-  /* Stack all gauges in a single row */
-  .hud-left,
-  .hud-right {
+    gap: 2px;
     justify-content: center;
   }
 
   .gauge {
-    width: 70px;
-    height: 70px;
+    width: 64px;
+    height: 64px;
   }
 
   .gauge-value {
-    font-size: 1rem;
+    font-size: 0.9rem;
   }
 
   .gauge-label {
-    font-size: 0.45rem;
+    font-size: 0.4rem;
   }
 
   .gauge-unit {
-    font-size: 0.4rem;
+    font-size: 0.35rem;
   }
 
   .engine-status {
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
   }
 
   .engine-svg {
-    width: 36px;
-    height: 36px;
-  }
-
-  .timeline {
-    max-width: 100%;
+    width: 32px;
     height: 32px;
   }
 
+  .timeline {
+    max-width: calc(100% - 32px);
+    height: 40px;
+  }
+
   .milestone-label {
-    font-size: 0.4rem;
+    font-size: 0.35rem;
   }
 
   .clock-time {
-    font-size: 1.2rem;
+    font-size: 1.1rem;
   }
 
   .clock-prefix {
-    font-size: 0.8rem;
+    font-size: 0.7rem;
   }
 
+  /* Prompt above the HUD timeline */
   .event-prompt {
     bottom: auto;
-    top: 12px;
+    top: 32px;
   }
 
   .prompt-text {
-    font-size: 0.7rem;
-    padding: 6px 16px;
+    font-size: 0.85rem;
+    padding: 12px 28px;
   }
 
   .result-title {
@@ -1136,11 +1135,15 @@ onUnmounted(() => {
 
   .stage-label {
     top: -10px;
-    font-size: 0.45rem;
+    font-size: 0.4rem;
   }
 
   .split-divider {
     height: calc(100% - 200px);
+  }
+
+  .mute-indicator {
+    display: none;
   }
 }
 </style>
