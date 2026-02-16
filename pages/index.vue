@@ -648,6 +648,7 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   background: #000;
   overflow: hidden;
 }
@@ -663,9 +664,9 @@ onUnmounted(() => {
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 4px;
+  width: 1px;
   height: calc(100% - 120px);
-  background: #000;
+  background: rgba(255, 255, 255, 0.2);
   z-index: 5;
 }
 
@@ -1212,7 +1213,7 @@ onUnmounted(() => {
   .hud {
     flex-wrap: wrap;
     justify-content: center;
-    padding: 8px 8px 24px;
+    padding: 8px 8px calc(24px + env(safe-area-inset-bottom, 0px));
     gap: 12px;
   }
 
@@ -1332,7 +1333,7 @@ onUnmounted(() => {
     left: 0;
     transform: translateY(-50%);
     width: 100%;
-    height: 4px;
+    height: 1px;
   }
 
   .credits-btn {

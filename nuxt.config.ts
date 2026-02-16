@@ -15,7 +15,7 @@ export default defineNuxtConfig({
       title: 'LAUNCH — SpaceX Launch Simulator',
       meta: [
         { charset: 'utf-8' },
-        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' },
         { name: 'description', content: 'Launch a rocket to orbit. Time your staging perfectly.' },
       ],
       link: [
