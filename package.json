@@ -1,9 +1,12 @@
 {
-  "name": "spacex-launch-sim",
+  "name": "spacegame",
   "version": "0.1.0",
-  "description": "SpaceX-style rocket launch simulator — time your staging to reach orbit",
+  "description": "Spacegame - a space exploration game",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "nuxt dev",
     "build": "nuxt build",
