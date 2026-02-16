@@ -444,12 +444,12 @@ export function useRenderer() {
 
         const float PI = 3.14159265;
         const float EARTH_R = 6371e3;
-        const float ATMOS_R = 6531e3;  // 160 km atmosphere for gradual fade
+        const float ATMOS_R = 6471e3;  // 100 km atmosphere — thinner, less limb glow
         const vec3 BETA_R = vec3(5.5e-6, 13.0e-6, 22.4e-6);
         const float BETA_M = 21e-6;
         const float HR = 8500.0;
         const float HM = 1200.0;
-        const float SUN_I = 30.0;
+        const float SUN_I = 18.0;
 
         vec2 raySphere(vec3 ro, vec3 rd, float sr) {
           float b = dot(ro, rd);
@@ -883,8 +883,10 @@ export function useRenderer() {
       clone.receiveShadow = true
 
       if (info.isRocket) {
-        // Y-based: mesh center above interstage → S2, otherwise → S1
-        if (info.center.y >= interstageY) {
+        // Y-based split, with override for the interstage ring connector
+        const isS2 = info.center.y >= interstageY
+          || info.mesh.name === 'Object_36'
+        if (isS2) {
           s2Group.add(clone)
           if (info.box.min.y < s2MinY) s2MinY = info.box.min.y
         } else {

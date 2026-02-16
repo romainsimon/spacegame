@@ -3,9 +3,7 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   ssr: false,
 
-  modules: [
-    '@pinia/nuxt',
-  ],
+  modules: ['@pinia/nuxt'],
 
   typescript: {
     strict: true,
@@ -24,6 +22,9 @@ export default defineNuxtConfig({
         { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
         { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
         { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=JetBrains+Mono:wght@400;600&display=swap' },
+      ],
+      script: [
+        { defer: true, 'data-domain': 'space.indiega.me', src: 'https://stats.yukicapital.com/js/script.js' },
       ],
     },
   },

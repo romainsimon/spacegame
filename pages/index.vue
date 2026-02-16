@@ -20,6 +20,12 @@ const ffTarget = ref<number | null>(null)
 const orbitReached = ref(false)
 let orbitTimer: ReturnType<typeof setTimeout> | null = null
 
+// Mobile / touch detection
+const isMobile = ref(false)
+if (typeof window !== 'undefined') {
+  isMobile.value = 'ontouchstart' in window || navigator.maxTouchPoints > 0
+}
+
 // Mission timeline milestones (evenly spaced visually)
 const milestones = [
   { id: 'startup', label: 'STARTUP', time: -3 },
@@ -156,10 +162,11 @@ const showPrompt = computed(() => {
 })
 
 const promptText = computed(() => {
-  if (state.value.phase === 'pre-launch' && !audioStarted.value) return 'PRESS SPACE TO START'
-  if (state.value.phase === 'pre-launch' && !started.value) return 'PRESS SPACE TO BEGIN COUNTDOWN'
-  if (state.value.phase === 'pre-launch') return 'PRESS SPACE TO LAUNCH'
-  if (state.value.activeEvent) return `PRESS SPACE \u2014 ${state.value.activeEvent.label}`
+  const action = isMobile.value ? 'PRESS' : 'PRESS SPACE'
+  if (state.value.phase === 'pre-launch' && !audioStarted.value) return `${action} TO START`
+  if (state.value.phase === 'pre-launch' && !started.value) return `${action} TO BEGIN COUNTDOWN`
+  if (state.value.phase === 'pre-launch') return `${action} TO LAUNCH`
+  if (state.value.activeEvent) return `${action} \u2014 ${state.value.activeEvent.label}`
   return ''
 })
 
@@ -247,50 +254,53 @@ function gameLoop(timestamp: number) {
   requestAnimationFrame(gameLoop)
 }
 
+// Primary action (space key / tap)
+function handleAction() {
+  // First press: init audio and play launch sequence voice
+  if (!audioStarted.value) {
+    audio.init()
+    audio.resume()
+    audioStarted.value = true
+    audio.playLaunchSequence()
+    return
+  }
+
+  // Second press: stop launch sequence voice, start the countdown
+  if (state.value.phase === 'pre-launch' && !started.value) {
+    audio.stopVoices()
+    started.value = true
+    return
+  }
+
+  // Play ignition cue + start music when launching
+  if (state.value.phase === 'pre-launch' && state.value.countdown <= 0) {
+    audio.playIgnition()
+    audio.playMusic()
+  }
+
+  const result = game.handlePlayerAction(state.value)
+  state.value = result.state
+
+  if (result.separated) {
+    renderer.triggerStageSeparation(state.value.flight)
+    audio.playStageSep()
+  }
+
+  // Detect SECO → orbit transition: play cue + delay success screen
+  if (state.value.phase === 'orbit' && !orbitReached.value && !orbitTimer) {
+    audio.playSeco()
+    orbitTimer = setTimeout(() => {
+      audio.playOrbitSuccess()
+      orbitReached.value = true
+    }, 3000)
+  }
+}
+
 // Keyboard input
 function onKeyDown(event: KeyboardEvent) {
   if (event.code === 'Space') {
     event.preventDefault()
-
-    // First press: init audio and play launch sequence voice
-    if (!audioStarted.value) {
-      audio.init()
-      audio.resume()
-      audioStarted.value = true
-      // Play launch sequence announcement — user hears it before starting
-      audio.playLaunchSequence()
-      return
-    }
-
-    // Second press: stop launch sequence voice, start the countdown
-    if (state.value.phase === 'pre-launch' && !started.value) {
-      audio.stopVoices()
-      started.value = true
-      return
-    }
-
-    // Play ignition cue + start music when launching
-    if (state.value.phase === 'pre-launch' && state.value.countdown <= 0) {
-      audio.playIgnition()
-      audio.playMusic()
-    }
-
-    const result = game.handlePlayerAction(state.value)
-    state.value = result.state
-
-    if (result.separated) {
-      renderer.triggerStageSeparation(state.value.flight)
-      audio.playStageSep()
-    }
-
-    // Detect SECO → orbit transition: play cue + delay success screen
-    if (state.value.phase === 'orbit' && !orbitReached.value && !orbitTimer) {
-      audio.playSeco()
-      orbitTimer = setTimeout(() => {
-        audio.playOrbitSuccess()
-        orbitReached.value = true
-      }, 3000)
-    }
+    handleAction()
   }
 
   if (event.code === 'KeyR') {
@@ -507,7 +517,7 @@ onUnmounted(() => {
 
     <!-- Event prompt -->
     <Transition name="prompt">
-      <div v-if="showPrompt" class="event-prompt">
+      <div v-if="showPrompt" class="event-prompt" @click="handleAction">
         <div class="prompt-text">{{ promptText }}</div>
         <div v-if="state.activeEvent?.requiresInput" class="timing-bar">
           <div class="timing-fill" :style="{ width: `${eventWindowProgress * 100}%` }" />
@@ -518,7 +528,7 @@ onUnmounted(() => {
 
     <!-- Orbit success screen -->
     <Transition name="fade">
-      <div v-if="orbitReached" class="result-overlay success">
+      <div v-if="orbitReached" class="result-overlay success" @click="restart">
         <div class="result-content">
           <div class="result-title">ORBIT ACHIEVED</div>
           <div class="result-stats">
@@ -539,14 +549,14 @@ onUnmounted(() => {
               <span class="stat-value highlight">{{ state.score }}</span>
             </div>
           </div>
-          <div class="result-action">PRESS R TO RETRY</div>
+          <div class="result-action">{{ isMobile ? 'TAP TO RETRY' : 'PRESS R TO RETRY' }}</div>
         </div>
       </div>
     </Transition>
 
     <!-- Failure screen -->
     <Transition name="fade">
-      <div v-if="state.phase === 'failed'" class="result-overlay failure">
+      <div v-if="state.phase === 'failed'" class="result-overlay failure" @click="restart">
         <div class="result-content">
           <div class="result-title fail">MISSION FAILED</div>
           <div class="fail-reason">{{ state.failReason }}</div>
@@ -560,7 +570,7 @@ onUnmounted(() => {
               <span class="stat-value">{{ game.formatSpeed(state.maxSpeed) }}</span>
             </div>
           </div>
-          <div class="result-action">PRESS R TO RETRY</div>
+          <div class="result-action">{{ isMobile ? 'TAP TO RETRY' : 'PRESS R TO RETRY' }}</div>
         </div>
       </div>
     </Transition>
@@ -879,6 +889,7 @@ onUnmounted(() => {
   transform: translateX(-50%);
   text-align: center;
   z-index: 15;
+  cursor: pointer;
 }
 
 .prompt-text {
@@ -938,6 +949,7 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.85);
   backdrop-filter: blur(20px);
   z-index: 50;
+  cursor: pointer;
 }
 
 .result-content {
@@ -1028,5 +1040,107 @@ onUnmounted(() => {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* === MOBILE LAYOUT === */
+@media (max-width: 768px) {
+  .hud {
+    flex-direction: column;
+    padding: 16px 12px 8px;
+    gap: 4px;
+  }
+
+  .hud-center {
+    order: -1;
+    padding: 0;
+    width: 100%;
+  }
+
+  .hud-left,
+  .hud-right {
+    gap: 4px;
+  }
+
+  .hud-left {
+    order: 0;
+  }
+
+  .hud-right {
+    order: 1;
+  }
+
+  /* Stack all gauges in a single row */
+  .hud-left,
+  .hud-right {
+    justify-content: center;
+  }
+
+  .gauge {
+    width: 70px;
+    height: 70px;
+  }
+
+  .gauge-value {
+    font-size: 1rem;
+  }
+
+  .gauge-label {
+    font-size: 0.45rem;
+  }
+
+  .gauge-unit {
+    font-size: 0.4rem;
+  }
+
+  .engine-status {
+    width: 44px;
+    height: 44px;
+  }
+
+  .engine-svg {
+    width: 36px;
+    height: 36px;
+  }
+
+  .timeline {
+    max-width: 100%;
+    height: 32px;
+  }
+
+  .milestone-label {
+    font-size: 0.4rem;
+  }
+
+  .clock-time {
+    font-size: 1.2rem;
+  }
+
+  .clock-prefix {
+    font-size: 0.8rem;
+  }
+
+  .event-prompt {
+    bottom: auto;
+    top: 12px;
+  }
+
+  .prompt-text {
+    font-size: 0.7rem;
+    padding: 6px 16px;
+  }
+
+  .result-title {
+    font-size: 1.5rem;
+    letter-spacing: 0.2em;
+  }
+
+  .stage-label {
+    top: -10px;
+    font-size: 0.45rem;
+  }
+
+  .split-divider {
+    height: calc(100% - 200px);
+  }
 }
 </style>
