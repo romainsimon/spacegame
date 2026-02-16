@@ -15,15 +15,17 @@ const isInitialized = ref(false)
 const audioStarted = ref(false)
 const started = ref(false)
 const isMuted = ref(false)
+const timeScale = ref(1)
+const ffTarget = ref<number | null>(null)
 
 // Mission timeline milestones (evenly spaced visually)
 const milestones = [
   { id: 'startup', label: 'STARTUP', time: -3 },
   { id: 'liftoff', label: 'LIFTOFF', time: 0 },
-  { id: 'max-q', label: 'MAX Q', time: 72 },
-  { id: 'meco', label: 'MECO', time: 155 },
-  { id: 'stage-sep', label: 'STAGE SEP', time: 158 },
-  { id: 'ses-1', label: 'SES-1', time: 165 },
+  { id: 'max-q', label: 'MAX Q', time: 70 },
+  { id: 'meco', label: 'MECO', time: 149 },
+  { id: 'stage-sep', label: 'STAGE SEP', time: 153 },
+  { id: 'ses-1', label: 'SES-1', time: 161 },
   { id: 'seco', label: 'SECO', time: 480 },
 ]
 
@@ -32,7 +34,10 @@ const GAUGE_RADIUS = 50
 const GAUGE_CIRCUMFERENCE = 2 * Math.PI * GAUGE_RADIUS // 314.16
 const GAUGE_ARC = GAUGE_CIRCUMFERENCE * 0.75 // 270° = 235.62
 
-// Derived display values
+// ── Split screen detection ──
+const isSplitScreen = computed(() => state.value.stage1Flight !== null)
+
+// ── Derived display values (Stage 2 / main) ──
 const missionTime = computed(() => {
   if (state.value.phase === 'pre-launch') {
     return -state.value.countdown
@@ -76,6 +81,30 @@ const gForce = computed(() => {
 const gForceDisplay = computed(() => gForce.value.toFixed(1))
 const gForceFill = computed(() => Math.min(1, gForce.value / 6))
 
+// ── Stage 1 telemetry (after separation) ──
+const s1SpeedKmh = computed(() => {
+  if (!state.value.stage1Flight) return 0
+  return state.value.stage1Flight.velocity * 3.6
+})
+const s1SpeedDisplay = computed(() => {
+  const v = Math.abs(s1SpeedKmh.value)
+  if (v >= 1000) return Math.round(v).toLocaleString('en-US')
+  return Math.round(v).toString()
+})
+const s1SpeedFill = computed(() => Math.min(1, Math.abs(s1SpeedKmh.value) / 30000))
+
+const s1AltitudeKm = computed(() => {
+  if (!state.value.stage1Flight) return 0
+  return state.value.stage1Flight.altitude / 1000
+})
+const s1AltitudeDisplay = computed(() => {
+  const a = s1AltitudeKm.value
+  if (a >= 10) return Math.round(a).toString()
+  if (a >= 1) return a.toFixed(1)
+  return a.toFixed(2)
+})
+const s1AltitudeFill = computed(() => Math.min(1, s1AltitudeKm.value / 500))
+
 // Gauge dashoffset helper
 function gaugeDashoffset(fill: number): number {
   return GAUGE_ARC * (1 - fill)
@@ -86,8 +115,7 @@ const engineDots = computed(() => {
   const stage = state.value.flight.stage
   const active = state.value.flight.throttle > 0 && state.value.flight.fuel > 0
   if (stage === 1) {
-    // Octaweb: center + 8 ring
-    const dots = [{ x: 18, y: 18, r: 4.5 }] // center
+    const dots = [{ x: 18, y: 18, r: 4.5 }]
     for (let i = 0; i < 8; i++) {
       const angle = (i / 8) * Math.PI * 2 - Math.PI / 2
       dots.push({
@@ -98,17 +126,12 @@ const engineDots = computed(() => {
     }
     return { dots, active }
   }
-  // Stage 2: single MVac
-  return {
-    dots: [{ x: 18, y: 18, r: 6 }],
-    active,
-  }
+  return { dots: [{ x: 18, y: 18, r: 6 }], active }
 })
 
 // Timeline progress
 const timelineProgress = computed(() => {
   const t = missionTime.value
-  // Find which segment we're in
   for (let i = 0; i < milestones.length - 1; i++) {
     if (t < milestones[i + 1].time) {
       const segStart = milestones[i].time
@@ -144,24 +167,74 @@ const eventWindowProgress = computed(() => {
   return Math.min(1, Math.max(0, elapsed / total))
 })
 
+// ── Fast forward ──
+const showFastForward = computed(() => {
+  const p = state.value.phase
+  if (p === 'orbit' || p === 'failed') return false
+  if (p === 'pre-launch' && !started.value) return false
+  if (state.value.activeEvent?.requiresInput) return false
+  return true
+})
+
+function toggleFastForward() {
+  if (timeScale.value > 1) {
+    timeScale.value = 1
+    ffTarget.value = null
+    return
+  }
+
+  const t = missionTime.value
+  const playerInputIds = new Set(['stage-sep', 'seco'])
+
+  for (const m of milestones) {
+    if (m.time <= t + 2) continue
+    const buffer = playerInputIds.has(m.id) ? 8 : 2
+    ffTarget.value = m.time - buffer
+    timeScale.value = 8
+    return
+  }
+}
+
 // Game loop
 function gameLoop(timestamp: number) {
   if (!isInitialized.value) return
 
-  const dt = lastTime.value === 0 ? 0.016 : Math.min((timestamp - lastTime.value) / 1000, 0.05)
+  const rawDt = lastTime.value === 0 ? 0.016 : Math.min((timestamp - lastTime.value) / 1000, 0.05)
   lastTime.value = timestamp
+  const dt = rawDt * timeScale.value
+
+  // Auto-stop fast forward at target or on terminal/input states
+  if (timeScale.value > 1) {
+    if ((ffTarget.value !== null && missionTime.value >= ffTarget.value)
+      || state.value.phase === 'orbit' || state.value.phase === 'failed'
+      || state.value.activeEvent?.requiresInput) {
+      timeScale.value = 1
+      ffTarget.value = null
+    }
+  }
+
+  // Track previous phase to detect failure
+  const prevPhase = state.value.phase
 
   // Update game state (freeze countdown until player starts)
   const canUpdate = state.value.phase !== 'orbit' && state.value.phase !== 'failed'
   if (canUpdate && (state.value.phase !== 'pre-launch' || started.value)) {
     state.value = game.update(state.value, dt)
+  } else if (!canUpdate) {
+    // Still update stage 1 coasting in orbit/failed
+    state.value = game.update(state.value, dt)
+  }
+
+  // Play problem voice on mission failure (missed event window)
+  if (prevPhase !== 'failed' && state.value.phase === 'failed') {
+    audio.playProblem()
   }
 
   // Update audio (pass countdown for voice cue timing)
   audio.update(state.value.flight, state.value.phase, state.value.countdown)
 
   // Update 3D scene
-  renderer.updateScene(state.value.flight, state.value.phase, state.value.countdown, started.value)
+  renderer.updateScene(state.value, started.value, dt)
   renderer.render()
 
   requestAnimationFrame(gameLoop)
@@ -185,9 +258,10 @@ function onKeyDown(event: KeyboardEvent) {
       return
     }
 
-    // Play ignition cue when launching
+    // Play ignition cue + start music when launching
     if (state.value.phase === 'pre-launch' && state.value.countdown <= 0) {
       audio.playIgnition()
+      audio.playMusic()
     }
 
     const result = game.handlePlayerAction(state.value)
@@ -214,6 +288,8 @@ function restart() {
   state.value = game.createInitialState()
   lastTime.value = 0
   started.value = false
+  timeScale.value = 1
+  ffTarget.value = null
   audio.resetCues()
 }
 
@@ -240,73 +316,69 @@ onUnmounted(() => {
     <!-- 3D Canvas -->
     <div ref="containerRef" class="canvas-container" />
 
-    <!-- Countdown overlay -->
-    <div v-if="state.phase === 'pre-launch' && started && state.countdown > 0" class="countdown-overlay">
-      <div class="countdown-number">{{ Math.ceil(state.countdown) }}</div>
-    </div>
+    <!-- Split-screen divider -->
+    <div v-if="isSplitScreen" class="split-divider" />
 
     <!-- SpaceX-style Telemetry HUD -->
     <div class="hud">
-      <!-- Left gauges: Speed + Altitude -->
+      <!-- Left gauges -->
       <div class="hud-left">
-        <!-- Speed gauge -->
-        <div class="gauge">
-          <svg viewBox="0 0 120 120" class="gauge-svg">
-            <circle
-              cx="60" cy="60" :r="GAUGE_RADIUS"
-              fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3"
-              stroke-linecap="round"
-              :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`"
-              transform="rotate(135, 60, 60)"
-            />
-            <circle
-              cx="60" cy="60" :r="GAUGE_RADIUS"
-              fill="none" stroke="#ffffff" stroke-width="3"
-              stroke-linecap="round"
-              :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`"
-              :stroke-dashoffset="gaugeDashoffset(speedFill)"
-              transform="rotate(135, 60, 60)"
-              class="gauge-fill"
-            />
-          </svg>
-          <div class="gauge-content">
-            <div class="gauge-label">SPEED</div>
-            <div class="gauge-value">{{ speedDisplay }}</div>
-            <div class="gauge-unit">{{ speedUnit }}</div>
+        <!-- In split mode: Stage 1 gauges -->
+        <template v-if="isSplitScreen">
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(s1SpeedFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">SPEED</div>
+              <div class="gauge-value">{{ s1SpeedDisplay }}</div>
+              <div class="gauge-unit">KM/H</div>
+            </div>
           </div>
-        </div>
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(s1AltitudeFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">ALTITUDE</div>
+              <div class="gauge-value">{{ s1AltitudeDisplay }}</div>
+              <div class="gauge-unit">KM</div>
+            </div>
+          </div>
+          <div class="stage-label">STAGE 1</div>
+        </template>
 
-        <!-- Altitude gauge -->
-        <div class="gauge">
-          <svg viewBox="0 0 120 120" class="gauge-svg">
-            <circle
-              cx="60" cy="60" :r="GAUGE_RADIUS"
-              fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3"
-              stroke-linecap="round"
-              :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`"
-              transform="rotate(135, 60, 60)"
-            />
-            <circle
-              cx="60" cy="60" :r="GAUGE_RADIUS"
-              fill="none" stroke="#ffffff" stroke-width="3"
-              stroke-linecap="round"
-              :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`"
-              :stroke-dashoffset="gaugeDashoffset(altitudeFill)"
-              transform="rotate(135, 60, 60)"
-              class="gauge-fill"
-            />
-          </svg>
-          <div class="gauge-content">
-            <div class="gauge-label">ALTITUDE</div>
-            <div class="gauge-value">{{ altitudeDisplay }}</div>
-            <div class="gauge-unit">{{ altitudeUnit }}</div>
+        <!-- Normal mode: Speed + Altitude gauges -->
+        <template v-else>
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(speedFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">SPEED</div>
+              <div class="gauge-value">{{ speedDisplay }}</div>
+              <div class="gauge-unit">{{ speedUnit }}</div>
+            </div>
           </div>
-        </div>
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(altitudeFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">ALTITUDE</div>
+              <div class="gauge-value">{{ altitudeDisplay }}</div>
+              <div class="gauge-unit">{{ altitudeUnit }}</div>
+            </div>
+          </div>
+        </template>
       </div>
 
       <!-- Center: Timeline + Clock -->
       <div class="hud-center">
-        <!-- Mission timeline -->
         <div class="timeline">
           <div class="timeline-track">
             <div class="timeline-fill" :style="{ width: `${timelineProgress}%` }" />
@@ -330,54 +402,77 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Mission clock -->
-        <div class="mission-clock">
-          <span class="clock-prefix">{{ missionTimePrefix }}</span>
-          <span class="clock-time">{{ missionTimeDisplay }}</span>
+        <div class="clock-row">
+          <div class="mission-clock">
+            <span class="clock-prefix">{{ missionTimePrefix }}</span>
+            <span class="clock-time">{{ missionTimeDisplay }}</span>
+          </div>
+          <button
+            v-if="showFastForward"
+            class="ff-btn"
+            :class="{ active: timeScale > 1 }"
+            @click="toggleFastForward"
+          >
+            <span v-if="timeScale > 1">{{ timeScale }}x</span>
+            <span v-else>&#x25B6;&#x25B6;</span>
+          </button>
         </div>
       </div>
 
-      <!-- Right: G-Force + Engine status -->
+      <!-- Right gauges -->
       <div class="hud-right">
-        <!-- G-Force gauge -->
-        <div class="gauge">
-          <svg viewBox="0 0 120 120" class="gauge-svg">
-            <circle
-              cx="60" cy="60" :r="GAUGE_RADIUS"
-              fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3"
-              stroke-linecap="round"
-              :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`"
-              transform="rotate(135, 60, 60)"
-            />
-            <circle
-              cx="60" cy="60" :r="GAUGE_RADIUS"
-              fill="none" stroke="#ffffff" stroke-width="3"
-              stroke-linecap="round"
-              :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`"
-              :stroke-dashoffset="gaugeDashoffset(gForceFill)"
-              transform="rotate(135, 60, 60)"
-              class="gauge-fill"
-            />
-          </svg>
-          <div class="gauge-content">
-            <div class="gauge-label">G-FORCE</div>
-            <div class="gauge-value">{{ gForceDisplay }}</div>
-            <div class="gauge-unit">G</div>
+        <!-- In split mode: Stage 2 gauges -->
+        <template v-if="isSplitScreen">
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(speedFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">SPEED</div>
+              <div class="gauge-value">{{ speedDisplay }}</div>
+              <div class="gauge-unit">KM/H</div>
+            </div>
           </div>
-        </div>
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(altitudeFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">ALTITUDE</div>
+              <div class="gauge-value">{{ altitudeDisplay }}</div>
+              <div class="gauge-unit">KM</div>
+            </div>
+          </div>
+          <div class="stage-label">STAGE 2</div>
+        </template>
 
-        <!-- Engine status -->
-        <div class="engine-status">
-          <svg viewBox="0 0 36 36" class="engine-svg">
-            <circle
-              v-for="(dot, i) in engineDots.dots"
-              :key="i"
-              :cx="dot.x" :cy="dot.y" :r="dot.r"
-              :fill="engineDots.active ? '#ffffff' : 'rgba(255,255,255,0.15)'"
-              :class="{ 'engine-active': engineDots.active }"
-            />
-          </svg>
-        </div>
+        <!-- Normal mode: G-Force + Engine status -->
+        <template v-else>
+          <div class="gauge">
+            <svg viewBox="0 0 120 120" class="gauge-svg">
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" transform="rotate(135, 60, 60)" />
+              <circle cx="60" cy="60" :r="GAUGE_RADIUS" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" :stroke-dasharray="`${GAUGE_ARC} ${GAUGE_CIRCUMFERENCE}`" :stroke-dashoffset="gaugeDashoffset(gForceFill)" transform="rotate(135, 60, 60)" class="gauge-fill" />
+            </svg>
+            <div class="gauge-content">
+              <div class="gauge-label">G-FORCE</div>
+              <div class="gauge-value">{{ gForceDisplay }}</div>
+              <div class="gauge-unit">G</div>
+            </div>
+          </div>
+          <div class="engine-status">
+            <svg viewBox="0 0 36 36" class="engine-svg">
+              <circle
+                v-for="(dot, i) in engineDots.dots"
+                :key="i"
+                :cx="dot.x" :cy="dot.y" :r="dot.r"
+                :fill="engineDots.active ? '#ffffff' : 'rgba(255,255,255,0.15)'"
+                :class="{ 'engine-active': engineDots.active }"
+              />
+            </svg>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -395,20 +490,6 @@ onUnmounted(() => {
           <div class="timing-fill" :style="{ width: `${eventWindowProgress * 100}%` }" />
           <div class="timing-marker" />
         </div>
-      </div>
-    </Transition>
-
-    <!-- MAX-Q indicator -->
-    <Transition name="fade">
-      <div v-if="state.phase === 'max-q'" class="event-label">
-        MAX-Q
-      </div>
-    </Transition>
-
-    <!-- MECO indicator -->
-    <Transition name="fade">
-      <div v-if="state.phase === 'stage-sep' && !state.activeEvent" class="event-label">
-        MECO
       </div>
     </Transition>
 
@@ -477,24 +558,16 @@ onUnmounted(() => {
   inset: 0;
 }
 
-/* === COUNTDOWN === */
-.countdown-overlay {
+/* === SPLIT SCREEN DIVIDER === */
+.split-divider {
   position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  z-index: 20;
-}
-
-.countdown-number {
-  font-family: var(--font-mono);
-  font-size: 8rem;
-  font-weight: 600;
-  color: var(--spacex-text);
-  opacity: 0.4;
-  text-shadow: 0 0 60px rgba(255, 255, 255, 0.2);
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: calc(100% - 120px);
+  background: #000;
+  z-index: 5;
 }
 
 /* === HUD === */
@@ -517,6 +590,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  position: relative;
 }
 
 .hud-center {
@@ -526,6 +600,20 @@ onUnmounted(() => {
   align-items: center;
   min-width: 0;
   padding: 0 24px;
+}
+
+/* === STAGE LABELS === */
+.stage-label {
+  position: absolute;
+  bottom: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--spacex-dim);
+  white-space: nowrap;
 }
 
 /* === GAUGES === */
@@ -656,7 +744,6 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.7);
 }
 
-/* Alternate labels top/bottom */
 .milestone.top .milestone-tick {
   top: calc(50% - 7px);
 }
@@ -672,6 +759,12 @@ onUnmounted(() => {
 }
 
 /* === MISSION CLOCK === */
+.clock-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .mission-clock {
   font-family: var(--font-mono);
   font-weight: 600;
@@ -688,6 +781,35 @@ onUnmounted(() => {
 
 .clock-time {
   font-size: 1.6rem;
+}
+
+/* === FAST FORWARD === */
+.ff-btn {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--spacex-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.ff-btn:hover {
+  color: var(--spacex-text);
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.ff-btn.active {
+  color: var(--spacex-accent);
+  border-color: var(--spacex-accent);
+  background: rgba(255, 255, 255, 0.08);
+  animation: pulse-border 1s ease-in-out infinite;
 }
 
 /* === ENGINE STATUS === */
@@ -780,21 +902,6 @@ onUnmounted(() => {
   width: 2px;
   background: var(--spacex-text);
   transform: translateX(-50%);
-}
-
-/* === EVENT LABELS === */
-.event-label {
-  position: absolute;
-  top: 40%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-family: var(--font-mono);
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: 0.3em;
-  color: var(--spacex-dim);
-  z-index: 15;
-  pointer-events: none;
 }
 
 /* === RESULT SCREENS === */

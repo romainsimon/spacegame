@@ -36,6 +36,7 @@ export interface GameState {
   phase: GamePhase
   countdown: number         // Pre-launch countdown (10 -> 0)
   flight: FlightData
+  stage1Flight: FlightData | null  // Stage 1 after separation (coasting)
   events: GameEvent[]
   currentEventIndex: number
   activeEvent: GameEvent | null

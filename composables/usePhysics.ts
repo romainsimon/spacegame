@@ -6,12 +6,12 @@ const SURFACE_GRAVITY = 9.81 // m/s²
 const SEA_LEVEL_AIR_DENSITY = 1.225 // kg/m³
 const ATMOSPHERE_SCALE_HEIGHT = 8500 // meters
 
-// Rocket parameters
-const STAGE1_DRY_MASS = 22_200 // kg (Falcon 9 first stage dry)
+// Rocket parameters (Falcon 9)
+const STAGE1_DRY_MASS = 22_200 // kg (first stage dry)
 const STAGE1_FUEL_MASS = 395_700 // kg
-const STAGE1_THRUST = 7_607_000 // N (9 Merlin engines at sea level)
-const STAGE1_BURN_TIME = 162 // seconds
-const STAGE1_ISP = 282 // seconds (sea level)
+const STAGE1_THRUST = 7_607_000 // N (9 Merlin at sea level)
+const STAGE1_ISP_SL = 282 // seconds (sea level)
+const STAGE1_ISP_VAC = 311 // seconds (vacuum)
 
 const STAGE2_DRY_MASS = 4_000 // kg
 const STAGE2_FUEL_MASS = 92_670 // kg
@@ -21,6 +21,9 @@ const STAGE2_ISP = 348 // seconds (vacuum)
 const PAYLOAD_MASS = 5_000 // kg
 const DRAG_COEFFICIENT = 0.3
 const CROSS_SECTION = 10.5 // m² (3.66m diameter)
+
+// Mass flow rate is constant (set by turbopump, doesn't change with altitude)
+const STAGE1_MASS_FLOW = STAGE1_THRUST / (STAGE1_ISP_SL * SURFACE_GRAVITY) // ~2749.5 kg/s
 
 export function usePhysics() {
   function createInitialFlightData(): FlightData {
@@ -61,15 +64,25 @@ export function usePhysics() {
     // Thrust
     let thrustAccel = 0
     if (f.throttle > 0 && f.fuel > 0) {
-      const thrust = f.stage === 1 ? STAGE1_THRUST : STAGE2_THRUST
-      const isp = f.stage === 1 ? STAGE1_ISP : STAGE2_ISP
-      thrustAccel = (thrust * f.throttle) / f.mass
+      let thrust: number
+      let massFlowRate: number
 
-      // Fuel consumption: mass flow = thrust / (isp * g0)
-      const massFlowRate = (thrust * f.throttle) / (isp * SURFACE_GRAVITY)
+      if (f.stage === 1) {
+        // ISP increases with altitude (nozzle expansion in lower pressure)
+        const altFactor = Math.min(1, f.altitude / 40000)
+        const effectiveIsp = STAGE1_ISP_SL + (STAGE1_ISP_VAC - STAGE1_ISP_SL) * altFactor
+        // Thrust = constant mass flow × effective ISP × g0
+        thrust = STAGE1_MASS_FLOW * effectiveIsp * SURFACE_GRAVITY * f.throttle
+        massFlowRate = STAGE1_MASS_FLOW * f.throttle
+      } else {
+        thrust = STAGE2_THRUST * f.throttle
+        massFlowRate = (STAGE2_THRUST * f.throttle) / (STAGE2_ISP * SURFACE_GRAVITY)
+      }
+
+      thrustAccel = thrust / f.mass
+
+      // Fuel consumption
       const fuelBurned = massFlowRate * dt
-
-      // Update fuel and mass
       const totalFuel = f.stage === 1 ? STAGE1_FUEL_MASS : STAGE2_FUEL_MASS
       const currentFuelMass = f.fuel * totalFuel
       const newFuelMass = Math.max(0, currentFuelMass - fuelBurned)
@@ -109,16 +122,26 @@ export function usePhysics() {
     return f
   }
 
-  function getStage1FuelMass() { return STAGE1_FUEL_MASS }
-  function getStage2FuelMass() { return STAGE2_FUEL_MASS }
-  function getStage1BurnTime() { return STAGE1_BURN_TIME }
+  function createStage1CoastingFlight(flight: FlightData): FlightData {
+    return {
+      altitude: flight.altitude,
+      velocity: flight.velocity,
+      acceleration: 0,
+      missionTime: flight.missionTime,
+      mass: STAGE1_DRY_MASS,
+      fuel: 0,
+      stage: 1,
+      throttle: 0,
+      dynamicPressure: 0,
+      gravity: flight.gravity,
+      drag: 0,
+    }
+  }
 
   return {
     createInitialFlightData,
     update,
     performStageSeparation,
-    getStage1FuelMass,
-    getStage2FuelMass,
-    getStage1BurnTime,
+    createStage1CoastingFlight,
   }
 }

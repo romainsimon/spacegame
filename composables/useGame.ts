@@ -4,12 +4,12 @@ import { usePhysics } from './usePhysics'
 const COUNTDOWN_DURATION = 16 // seconds
 const MAX_Q_DISPLAY_DURATION = 3 // seconds to show MAX-Q label
 
-// Mission events timeline (approximate Falcon 9 profile)
+// Mission events timeline (Falcon 9 profile)
 const MISSION_EVENTS: GameEvent[] = [
   {
     id: 'max-q',
     label: 'MAX-Q',
-    triggerTime: 72,
+    triggerTime: 70,
     windowSize: 0,
     phase: 'max-q',
     nextPhase: 'flying',
@@ -18,7 +18,7 @@ const MISSION_EVENTS: GameEvent[] = [
   {
     id: 'meco',
     label: 'MECO',
-    triggerTime: 155,
+    triggerTime: 149,
     windowSize: 5,
     phase: 'stage-sep',
     nextPhase: 'stage-sep',
@@ -27,7 +27,7 @@ const MISSION_EVENTS: GameEvent[] = [
   {
     id: 'stage-sep',
     label: 'STAGE SEPARATION',
-    triggerTime: 158,
+    triggerTime: 153,
     windowSize: 4,
     phase: 'stage-sep',
     nextPhase: 'stage2-flight',
@@ -36,7 +36,7 @@ const MISSION_EVENTS: GameEvent[] = [
   {
     id: 'ses-1',
     label: 'SES-1',
-    triggerTime: 165,
+    triggerTime: 161,
     windowSize: 0,
     phase: 'stage2-flight',
     nextPhase: 'stage2-flight',
@@ -65,6 +65,7 @@ export function useGame() {
       phase: 'pre-launch',
       countdown: COUNTDOWN_DURATION,
       flight: physics.createInitialFlightData(),
+      stage1Flight: null,
       events: MISSION_EVENTS.map(e => ({ ...e })),
       currentEventIndex: 0,
       activeEvent: null,
@@ -89,6 +90,10 @@ export function useGame() {
         return updateFlight(state, dt)
       case 'orbit':
       case 'failed':
+        // Still update stage 1 coasting in terminal states
+        if (state.stage1Flight && state.stage1Flight.altitude > 0) {
+          state.stage1Flight = physics.update(state.stage1Flight, dt)
+        }
         return state
     }
     return state
@@ -101,9 +106,30 @@ export function useGame() {
     return state
   }
 
+  // Stage 1 throttle profile (mimics Falcon 9 max-Q bucket)
+  function getStage1Throttle(missionTime: number): number {
+    if (missionTime < 26) return 1.0      // Full throttle at launch
+    if (missionTime < 60) return 0.80     // Throttle bucket for max-Q
+    if (missionTime < 70) {               // Ramp back up after max-Q
+      const t = (missionTime - 60) / 10
+      return 0.80 + t * 0.20
+    }
+    return 1.0                            // Full throttle to MECO
+  }
+
   function updateFlight(state: GameState, dt: number): GameState {
+    // Apply throttle profile for stage 1
+    if (state.flight.stage === 1 && state.flight.throttle > 0) {
+      state.flight.throttle = getStage1Throttle(state.flight.missionTime)
+    }
+
     // Update physics
     state.flight = physics.update(state.flight, dt)
+
+    // Update stage 1 coasting physics (after separation)
+    if (state.stage1Flight && state.stage1Flight.altitude > 0) {
+      state.stage1Flight = physics.update(state.stage1Flight, dt)
+    }
 
     // Track max values
     if (state.flight.altitude > state.maxAltitude) {
@@ -195,6 +221,9 @@ export function useGame() {
           const timeDiff = Math.abs(state.flight.missionTime - state.activeEvent.triggerTime)
           state.eventAccuracy = Math.max(0, 1 - (timeDiff / state.activeEvent.windowSize))
           state.score += Math.round(state.eventAccuracy * 100)
+
+          // Create stage 1 coasting flight data (before separation changes the flight)
+          state.stage1Flight = physics.createStage1CoastingFlight(state.flight)
 
           // Perform separation
           state.flight = physics.performStageSeparation(state.flight)
