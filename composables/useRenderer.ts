@@ -21,32 +21,6 @@ function altitudeToVisual(altitude: number): number {
   return 1000 + Math.log10(altitude / 1000) * 2000
 }
 
-// ── Terrain noise (CPU side) ────────────────────────────────────────
-
-function _hash(x: number, y: number): number {
-  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
-  return n - Math.floor(n)
-}
-
-function _noise(x: number, y: number): number {
-  const ix = Math.floor(x), iy = Math.floor(y)
-  const fx = x - ix, fy = y - iy
-  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy)
-  return _hash(ix, iy) * (1 - sx) * (1 - sy)
-    + _hash(ix + 1, iy) * sx * (1 - sy)
-    + _hash(ix, iy + 1) * (1 - sx) * sy
-    + _hash(ix + 1, iy + 1) * sx * sy
-}
-
-function _fbm(x: number, y: number, octaves: number): number {
-  let v = 0, a = 0.5
-  for (let i = 0; i < octaves; i++) {
-    v += a * _noise(x, y)
-    x *= 2; y *= 2; a *= 0.5
-  }
-  return v
-}
-
 // ── Renderer ────────────────────────────────────────────────────────
 
 export function useRenderer() {
@@ -166,7 +140,7 @@ export function useRenderer() {
     }
 
     // Dynamic fire light
-    fireLight = new THREE.PointLight(0xff6622, 0, 250)
+    fireLight = new THREE.PointLight(0xffaa33, 0, 250)
     fireLight.position.set(0, 2, 0)
     scene.add(fireLight)
 
@@ -197,9 +171,9 @@ export function useRenderer() {
     composer.addPass(renderPass)
     composer.addPass(new UnrealBloomPass(
       new THREE.Vector2(containerWidth, containerHeight),
-      0.8,  // strength
+      0.7,  // strength — subtle bloom, not washed out
       0.4,  // radius
-      0.75, // threshold
+      0.88, // threshold — only the very brightest HDR fire blooms
     ))
     composer.addPass(new OutputPass())
 
@@ -302,75 +276,44 @@ export function useRenderer() {
     scene.add(atmosphereMesh)
   }
 
-  // ── Terrain (noise-displaced ground) ──────────────────────────────
+  // ── Terrain (satellite texture with displacement) ───────────────
 
   function buildTerrain() {
-    const size = 3000
-    const segments = 128
+    const size = 2000
+    const segments = 256
     const geo = new THREE.PlaneGeometry(size, size, segments, segments)
     geo.rotateX(-Math.PI / 2)
 
-    const pos = geo.getAttribute('position') as THREE.BufferAttribute
-    const colors = new Float32Array(pos.count * 3)
+    // UV2 needed for aoMap
+    geo.setAttribute('uv2', geo.getAttribute('uv').clone())
 
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i)
-      const z = pos.getZ(i)
-      const dist = Math.sqrt(x * x + z * z)
+    const loader = new THREE.TextureLoader()
 
-      // Height displacement — flat near pad, rolling hills farther out
-      const padFlat = Math.max(0, 1 - dist / 80)
-      const h = _fbm(x * 0.003 + 10, z * 0.003 + 10, 4) * 12 * (1 - padFlat)
-      pos.setY(i, h)
+    const colorTex = loader.load('/textures/launch/launch-site.jpg')
+    colorTex.colorSpace = THREE.SRGBColorSpace
 
-      // Color bands
-      const n = _fbm(x * 0.01 + 50, z * 0.01 + 50, 3)
-      const n2 = _fbm(x * 0.005 + 100, z * 0.005 + 100, 2)
-      let r: number, g: number, b: number
+    const normalTex = loader.load('/textures/launch/launch-site_normal.jpg')
 
-      if (dist < 25) {
-        // Concrete launch pad — light grey with scorch marks
-        const scorch = _fbm(x * 0.05 + 200, z * 0.05 + 200, 2) * 0.15
-        r = 0.50 - scorch + n * 0.04; g = 0.48 - scorch + n * 0.04; b = 0.45 - scorch + n * 0.03
-      } else if (dist < 60) {
-        // Transition: concrete → sandy ground
-        const t = (dist - 25) / 35
-        const cr = 0.48, cg = 0.46, cb = 0.42
-        const gr = 0.42 + n * 0.06, gg = 0.36 + n * 0.05, gb = 0.26 + n * 0.04
-        r = cr * (1 - t) + gr * t; g = cg * (1 - t) + gg * t; b = cb * (1 - t) + gb * t
-      } else {
-        // Sandy scrubland with sparse vegetation (Florida/Texas coast)
-        const sr = 0.40, sg = 0.35, sb = 0.25  // dry sandy base
-        const vr = 0.22 + n * 0.06, vg = 0.30 + n * 0.08, vb = 0.15 + n * 0.04  // green patches
-        const moisture = n2
-        r = sr * (1 - moisture) + vr * moisture
-        g = sg * (1 - moisture) + vg * moisture
-        b = sb * (1 - moisture) + vb * moisture
+    const displacementTex = loader.load('/textures/launch/launch-site_displacement.jpg')
 
-        // Gentle fade at edges (not too dark)
-        const edgeFade = Math.min(1, dist / 1200)
-        r *= 1 - edgeFade * 0.3
-        g *= 1 - edgeFade * 0.3
-        b *= 1 - edgeFade * 0.3
-      }
-
-      colors[i * 3] = r
-      colors[i * 3 + 1] = g
-      colors[i * 3 + 2] = b
-    }
-
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-    geo.computeVertexNormals()
+    const aoTex = loader.load('/textures/launch/launch-site_ao.jpg')
 
     const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
+      map: colorTex,
+      normalMap: normalTex,
+      normalScale: new THREE.Vector2(1.5, 1.5),
+      displacementMap: displacementTex,
+      displacementScale: 0.7,
+      displacementBias: -0.35,
+      aoMap: aoTex,
+      aoMapIntensity: 0.6,
       roughness: 0.85,
       metalness: 0.0,
     })
 
     const terrain = new THREE.Mesh(geo, mat)
     terrain.receiveShadow = true
-    terrain.position.y = 0.05
+    terrain.position.y = 0
     scene.add(terrain)
   }
 
@@ -540,8 +483,8 @@ export function useRenderer() {
     stage2Group.visible = false
     rocketGroup.add(stage2Group)
 
-    // === ENGINE FLAME (additive glow core) ===
-    const flameGeo = new THREE.ConeGeometry(1.2, 8, 16)
+    // === ENGINE FLAME (additive glow core — tall columnar plume) ===
+    const flameGeo = new THREE.ConeGeometry(2.2, 45, 16)
     const flameMat = new THREE.ShaderMaterial({
       uniforms: { time: { value: 0 } },
       vertexShader: /* glsl */ `
@@ -556,9 +499,25 @@ export function useRenderer() {
         varying vec2 vUv;
         void main() {
           float t = vUv.y;
-          vec3 col = mix(vec3(0.4, 0.6, 1.0) * 2.0, vec3(1.0, 0.6, 0.1) * 1.5, t);
-          float flicker = 0.85 + 0.15 * sin(time * 40.0 + t * 10.0);
-          float alpha = (1.0 - t) * 0.7 * flicker;
+          // Noise-based flicker
+          float n = fract(sin(dot(vec2(t * 8.0 + time * 25.0, time * 15.0), vec2(127.1, 311.7))) * 43758.5453);
+          float flicker = 0.85 + 0.15 * n;
+
+          // Color: warm yellow core → golden → amber tip
+          vec3 col;
+          if (t < 0.15) {
+            col = vec3(1.0, 0.9, 0.55) * 4.0;
+          } else if (t < 0.4) {
+            float s = (t - 0.15) / 0.25;
+            col = mix(vec3(1.0, 0.85, 0.4) * 3.5, vec3(1.0, 0.65, 0.15) * 2.5, s);
+          } else if (t < 0.7) {
+            float s = (t - 0.4) / 0.3;
+            col = mix(vec3(1.0, 0.65, 0.15) * 2.5, vec3(0.9, 0.35, 0.03) * 1.2, s);
+          } else {
+            float s = (t - 0.7) / 0.3;
+            col = mix(vec3(0.9, 0.35, 0.03) * 1.2, vec3(0.4, 0.08, 0.0) * 0.3, s);
+          }
+          float alpha = (1.0 - t * t) * 0.8 * flicker;
           gl_FragColor = vec4(col * flicker, alpha);
         }
       `,
@@ -568,10 +527,11 @@ export function useRenderer() {
       side: THREE.DoubleSide,
     })
     flameMesh = new THREE.Mesh(flameGeo, flameMat)
-    flameMesh.position.y = -5.5
+    flameMesh.position.y = -19.5
     flameMesh.rotation.x = Math.PI
     flameMesh.visible = false
     flameGroup.add(flameMesh)
+    flameGroup.position.x = -1.2
 
     rocketGroup.add(flameGroup)
     rocketGroup.position.y = 0.5
@@ -1089,7 +1049,7 @@ export function useRenderer() {
         stage1Group.visible = true
       }
       flameGroup.position.y = 0
-      flameMesh.position.y = -5.5
+      flameMesh.position.y = -19.5
       particles.reset()
     }
 
@@ -1157,7 +1117,7 @@ export function useRenderer() {
       if (flight.stage === 2) {
         const s2FlameY = modelLoaded ? s2NozzleLocalY : 42
         flameGroup.position.y = s2FlameY
-        flameMesh.position.y = -3
+        flameMesh.position.y = -12
       }
     }
 
@@ -1166,8 +1126,8 @@ export function useRenderer() {
       const fireLightY = flight.stage === 1 ? -1.5 : (modelLoaded ? s2NozzleLocalY : 41.5)
       fireLight.position.set(0, rocketGroup.position.y + fireLightY, 0)
       const flicker = 0.8 + Math.random() * 0.4
-      fireLight.intensity = flight.throttle * (flight.stage === 1 ? 8 : 3) * flicker
-      fireLight.distance = flight.altitude < 500 ? 250 : 100
+      fireLight.intensity = flight.throttle * (flight.stage === 1 ? 12 : 4) * flicker
+      fireLight.distance = flight.altitude < 500 ? 300 : 120
     } else {
       fireLight.intensity = 0
     }

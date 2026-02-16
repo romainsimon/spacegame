@@ -26,18 +26,6 @@ export interface ParticleConfig {
   started: boolean
 }
 
-function createRadialTexture(stops: [number, string][]): THREE.Texture {
-  const s = 64
-  const c = document.createElement('canvas')
-  c.width = s; c.height = s
-  const ctx = c.getContext('2d')!
-  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2)
-  for (const [pos, col] of stops) g.addColorStop(pos, col)
-  ctx.fillStyle = g
-  ctx.fillRect(0, 0, s, s)
-  return new THREE.CanvasTexture(c)
-}
-
 // ── Shaders ──────────────────────────────────────────────────────────
 
 const FIRE_VERT = /* glsl */ `
@@ -48,32 +36,49 @@ varying float vLife;
 void main() {
   vLife = clamp(pAge / pMaxAge, 0.0, 1.0);
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  float grow = pSize * (1.0 + vLife * 1.5);
-  gl_PointSize = min(grow * (500.0 / -mv.z), 256.0);
+  float grow = pSize * (1.0 + vLife * 2.5);
+  gl_PointSize = min(grow * (500.0 / -mv.z), 512.0);
   gl_Position = projectionMatrix * mv;
 }
 `
 
 const FIRE_FRAG = /* glsl */ `
-uniform sampler2D map;
 varying float vLife;
 void main() {
-  vec4 tex = texture2D(map, gl_PointCoord);
+  vec2 uv = gl_PointCoord * 2.0 - 1.0;
+  float dist = length(uv);
+
+  // Turbulent edge distortion via cheap angle-based noise
+  float angle = atan(uv.y, uv.x);
+  float noise = fract(sin(dot(vec2(angle * 3.0 + vLife * 12.0, vLife * 7.0), vec2(127.1, 311.7))) * 43758.5453);
+  float edge = 0.8 + noise * 0.2;
+  float shape = 1.0 - smoothstep(0.0, edge, dist);
+  shape *= shape;
+
+  // Warm golden color ramp: bright yellow core → golden → amber → dark
   vec3 col;
   float t = vLife;
-  if (t < 0.1) {
-    col = vec3(1.0, 1.0, 0.95) * 4.0;
-  } else if (t < 0.3) {
-    float s = (t - 0.1) / 0.2;
-    col = mix(vec3(1.0, 1.0, 0.7) * 3.0, vec3(1.0, 0.7, 0.2) * 2.0, s);
-  } else if (t < 0.6) {
-    float s = (t - 0.3) / 0.3;
-    col = mix(vec3(1.0, 0.7, 0.2) * 2.0, vec3(1.0, 0.3, 0.0), s);
+  if (t < 0.08) {
+    col = vec3(1.0, 0.92, 0.6) * 5.0;
+  } else if (t < 0.2) {
+    float s = (t - 0.08) / 0.12;
+    col = mix(vec3(1.0, 0.88, 0.5) * 4.0, vec3(1.0, 0.78, 0.3) * 3.0, s);
+  } else if (t < 0.4) {
+    float s = (t - 0.2) / 0.2;
+    col = mix(vec3(1.0, 0.78, 0.3) * 3.0, vec3(1.0, 0.55, 0.1) * 2.0, s);
+  } else if (t < 0.7) {
+    float s = (t - 0.4) / 0.3;
+    col = mix(vec3(1.0, 0.55, 0.1) * 2.0, vec3(0.8, 0.3, 0.02) * 0.9, s);
   } else {
-    float s = (t - 0.6) / 0.4;
-    col = mix(vec3(1.0, 0.3, 0.0), vec3(0.3, 0.05, 0.0), s);
+    float s = (t - 0.7) / 0.3;
+    col = mix(vec3(0.8, 0.3, 0.02) * 0.9, vec3(0.2, 0.05, 0.0), s);
   }
-  float a = tex.a * (1.0 - smoothstep(0.6, 1.0, t));
+
+  // Center-of-particle brightness boost (golden glow)
+  float core = (1.0 - smoothstep(0.0, 0.35, dist)) * (1.0 - t * 0.8);
+  col *= (1.0 + core * 2.0);
+
+  float a = shape * (1.0 - smoothstep(0.55, 1.0, t));
   gl_FragColor = vec4(col, a);
 }
 `
@@ -240,20 +245,11 @@ export function useParticles() {
   }
 
   function init() {
-    const fireTex = createRadialTexture([
-      [0, 'rgba(255,255,255,1)'],
-      [0.15, 'rgba(255,230,170,0.9)'],
-      [0.4, 'rgba(255,160,60,0.5)'],
-      [0.7, 'rgba(220,60,0,0.15)'],
-      [1, 'rgba(0,0,0,0)'],
-    ])
-
-    // Smoke and steam use procedural noise in shader — no texture needed
+    // All shaders are fully procedural — no textures needed
 
     // Fire
     fireGeo = initGeometry(MAX_FIRE)
     const fireMat = new THREE.ShaderMaterial({
-      uniforms: { map: { value: fireTex } },
       vertexShader: FIRE_VERT,
       fragmentShader: FIRE_FRAG,
       transparent: true,
@@ -432,40 +428,72 @@ export function useParticles() {
     if (throttle <= 0) return
 
     const altFactor = Math.min(1, altitude / 50000)
-    const spread = 0.5 + altFactor * 2.0
-    const sizeBase = stage === 1 ? 7 : 3.5
-
-    // Boost at very low altitude — ground deflection effect
     const groundBoost = altitude < 300 ? 1.5 + (1 - altitude / 300) : 1.0
-    const rate = (stage === 1 ? 250 : 100) * groundBoost
-    const count = Math.floor(rate * throttle * dt + Math.random())
 
-    for (let i = 0; i < count; i++) {
+    // ── Core exhaust particles (tight, bright, fast) ──
+    const coreRate = (stage === 1 ? 180 : 80) * groundBoost
+    const coreCount = Math.floor(coreRate * throttle * dt + Math.random())
+
+    for (let i = 0; i < coreCount; i++) {
       const p = findSlot(firePool)
       if (!p) break
       p.active = true
       p.age = 0
-      p.maxAge = 0.15 + Math.random() * 0.5
-      p.size = (sizeBase + Math.random() * sizeBase * 0.8) * (1 + (groundBoost - 1) * 0.5)
+      p.maxAge = 0.3 + Math.random() * 0.9
+      const sizeBase = stage === 1 ? 8 : 4
+      p.size = (sizeBase + Math.random() * sizeBase * 0.6) * (1 + (groundBoost - 1) * 0.4)
 
-      // Wider fire at ground level (deflection off flame trench)
-      const groundSpread = altitude < 200 ? spread + (1 - altitude / 200) * 5 : spread
-      p.x = (Math.random() - 0.5) * groundSpread * 2
+      // Tight columnar spread
+      const spread = 0.8 + altFactor * 1.5
+      const groundSpread = altitude < 200 ? spread + (1 - altitude / 200) * 4 : spread
+      p.x = (Math.random() - 0.5) * groundSpread
       p.y = nozzleY
-      p.z = (Math.random() - 0.5) * groundSpread * 2
+      p.z = (Math.random() - 0.5) * groundSpread
 
-      const speed = 15 + Math.random() * 15
-      p.vx = (Math.random() - 0.5) * groundSpread * 8
+      const speed = 30 + Math.random() * 35
+      p.vx = (Math.random() - 0.5) * groundSpread * 3
       p.vy = -speed
-      p.vz = (Math.random() - 0.5) * groundSpread * 8
+      p.vz = (Math.random() - 0.5) * groundSpread * 3
 
-      // At ground level, fire deflects sideways off the pad
       if (altitude < 100) {
         const a = Math.random() * Math.PI * 2
         const deflect = (1 - altitude / 100) * 20
         p.vx += Math.cos(a) * deflect
         p.vz += Math.sin(a) * deflect
         p.vy *= 0.5
+      }
+    }
+
+    // ── Glow particles (large, soft golden halo around plume) ──
+    const glowRate = (stage === 1 ? 55 : 22) * groundBoost
+    const glowCount = Math.floor(glowRate * throttle * dt + Math.random())
+
+    for (let i = 0; i < glowCount; i++) {
+      const p = findSlot(firePool)
+      if (!p) break
+      p.active = true
+      p.age = 0
+      p.maxAge = 0.5 + Math.random() * 1.2
+      const sizeBase = stage === 1 ? 18 : 10
+      p.size = (sizeBase + Math.random() * sizeBase * 0.8) * (1 + (groundBoost - 1) * 0.3)
+
+      const spread = 2.0 + altFactor * 3.0
+      const groundSpread = altitude < 200 ? spread + (1 - altitude / 200) * 6 : spread
+      p.x = (Math.random() - 0.5) * groundSpread
+      p.y = nozzleY
+      p.z = (Math.random() - 0.5) * groundSpread
+
+      const speed = 20 + Math.random() * 25
+      p.vx = (Math.random() - 0.5) * groundSpread * 2
+      p.vy = -speed
+      p.vz = (Math.random() - 0.5) * groundSpread * 2
+
+      if (altitude < 100) {
+        const a = Math.random() * Math.PI * 2
+        const deflect = (1 - altitude / 100) * 15
+        p.vx += Math.cos(a) * deflect
+        p.vz += Math.sin(a) * deflect
+        p.vy *= 0.6
       }
     }
   }
