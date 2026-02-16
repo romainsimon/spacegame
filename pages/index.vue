@@ -378,7 +378,7 @@ onUnmounted(() => {
     <div v-if="isSplitScreen" class="split-divider" />
 
     <!-- SpaceX-style Telemetry HUD -->
-    <div class="hud">
+    <div class="hud" :class="{ 'hud-split': isSplitScreen }">
       <!-- Left gauges -->
       <div class="hud-left">
         <!-- In split mode: Stage 1 gauges -->
@@ -1212,8 +1212,8 @@ onUnmounted(() => {
   .hud {
     flex-wrap: wrap;
     justify-content: center;
-    padding: 8px 8px 6px;
-    gap: 2px;
+    padding: 8px 8px 24px;
+    gap: 12px;
   }
 
   /* Timeline + clock: full width, first row */
@@ -1226,7 +1226,7 @@ onUnmounted(() => {
   /* Left + right gauges share second row */
   .hud-left,
   .hud-right {
-    gap: 2px;
+    gap: 8px;
     justify-content: center;
   }
 
@@ -1277,17 +1277,49 @@ onUnmounted(() => {
   /* Prompt above the HUD timeline */
   .event-prompt {
     bottom: auto;
-    top: 32px;
+    top: 80px;
   }
 
   .prompt-text {
     font-size: 0.85rem;
     padding: 12px 28px;
+    white-space: nowrap;
   }
 
   .result-title {
-    font-size: 1.5rem;
-    letter-spacing: 0.2em;
+    font-size: 1.2rem;
+    letter-spacing: 0.15em;
+    margin-bottom: 20px;
+  }
+
+  .fail-reason {
+    font-size: 0.75rem;
+    margin-bottom: 20px;
+  }
+
+  .result-stats {
+    margin-bottom: 24px;
+    gap: 8px;
+  }
+
+  .stat-row {
+    gap: 24px;
+  }
+
+  .stat-label {
+    font-size: 0.55rem;
+  }
+
+  .stat-value {
+    font-size: 0.8rem;
+  }
+
+  .stat-value.highlight {
+    font-size: 1rem;
+  }
+
+  .result-action {
+    font-size: 0.65rem;
   }
 
   .stage-label {
@@ -1311,6 +1343,21 @@ onUnmounted(() => {
     pointer-events: auto;
     cursor: pointer;
     padding: 8px 12px;
+  }
+
+  /* Split mode: Stage 1 gauges float to top half */
+  .hud.hud-split .hud-left {
+    position: fixed;
+    top: 12px;
+    left: 0;
+    right: 0;
+    justify-content: center;
+    z-index: 10;
+  }
+
+  .hud.hud-split .hud-left .stage-label {
+    top: auto;
+    bottom: -14px;
   }
 }
 </style>
