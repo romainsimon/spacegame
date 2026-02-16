@@ -3,6 +3,7 @@ import { usePhysics } from './usePhysics'
 
 const COUNTDOWN_DURATION = 16 // seconds
 const MAX_Q_DISPLAY_DURATION = 3 // seconds to show MAX-Q label
+const LAUNCH_WINDOW = 10 // seconds after countdown=0 before auto-abort
 
 // Mission events timeline (Falcon 9 profile)
 const MISSION_EVENTS: GameEvent[] = [
@@ -58,9 +59,11 @@ export function useGame() {
 
   // Track max-q display timer (not part of serializable state)
   let maxQTimer = 0
+  let launchWindowTimer = 0
 
   function createInitialState(): GameState {
     maxQTimer = 0
+    launchWindowTimer = 0
     return {
       phase: 'pre-launch',
       countdown: COUNTDOWN_DURATION,
@@ -102,6 +105,13 @@ export function useGame() {
   function updatePreLaunch(state: GameState, dt: number): GameState {
     if (state.countdown > 0) {
       state.countdown = Math.max(0, state.countdown - dt)
+    } else {
+      // Countdown reached 0 — player must press SPACE within the launch window
+      launchWindowTimer += dt
+      if (launchWindowTimer >= LAUNCH_WINDOW) {
+        state.phase = 'failed'
+        state.failReason = 'Launch window expired — mission aborted'
+      }
     }
     return state
   }

@@ -17,6 +17,8 @@ const started = ref(false)
 const isMuted = ref(false)
 const timeScale = ref(1)
 const ffTarget = ref<number | null>(null)
+const orbitReached = ref(false)
+let orbitTimer: ReturnType<typeof setTimeout> | null = null
 
 // Mission timeline milestones (evenly spaced visually)
 const milestones = [
@@ -146,6 +148,7 @@ const timelineProgress = computed(() => {
 })
 
 const showPrompt = computed(() => {
+  if (state.value.phase === 'pre-launch' && !audioStarted.value) return true
   if (state.value.phase === 'pre-launch' && !started.value) return true
   if (state.value.phase === 'pre-launch' && state.value.countdown <= 0) return true
   if (state.value.activeEvent?.requiresInput) return true
@@ -153,7 +156,8 @@ const showPrompt = computed(() => {
 })
 
 const promptText = computed(() => {
-  if (state.value.phase === 'pre-launch' && !started.value) return 'PRESS SPACE TO START'
+  if (state.value.phase === 'pre-launch' && !audioStarted.value) return 'PRESS SPACE TO START'
+  if (state.value.phase === 'pre-launch' && !started.value) return 'PRESS SPACE TO BEGIN COUNTDOWN'
   if (state.value.phase === 'pre-launch') return 'PRESS SPACE TO LAUNCH'
   if (state.value.activeEvent) return `PRESS SPACE \u2014 ${state.value.activeEvent.label}`
   return ''
@@ -182,6 +186,9 @@ function toggleFastForward() {
     ffTarget.value = null
     return
   }
+
+  // Stop any currently playing voice cues
+  audio.stopVoices()
 
   const t = missionTime.value
   const playerInputIds = new Set(['stage-sep', 'seco'])
@@ -245,15 +252,19 @@ function onKeyDown(event: KeyboardEvent) {
   if (event.code === 'Space') {
     event.preventDefault()
 
-    // Init audio on first interaction (browser requires user gesture)
+    // First press: init audio and play launch sequence voice
     if (!audioStarted.value) {
       audio.init()
       audio.resume()
       audioStarted.value = true
+      // Play launch sequence announcement — user hears it before starting
+      audio.playLaunchSequence()
+      return
     }
 
-    // First press: start the countdown
+    // Second press: stop launch sequence voice, start the countdown
     if (state.value.phase === 'pre-launch' && !started.value) {
+      audio.stopVoices()
       started.value = true
       return
     }
@@ -270,6 +281,15 @@ function onKeyDown(event: KeyboardEvent) {
     if (result.separated) {
       renderer.triggerStageSeparation(state.value.flight)
       audio.playStageSep()
+    }
+
+    // Detect SECO → orbit transition: play cue + delay success screen
+    if (state.value.phase === 'orbit' && !orbitReached.value && !orbitTimer) {
+      audio.playSeco()
+      orbitTimer = setTimeout(() => {
+        audio.playOrbitSuccess()
+        orbitReached.value = true
+      }, 3000)
     }
   }
 
@@ -290,6 +310,8 @@ function restart() {
   started.value = false
   timeScale.value = 1
   ffTarget.value = null
+  orbitReached.value = false
+  if (orbitTimer) { clearTimeout(orbitTimer); orbitTimer = null }
   audio.resetCues()
 }
 
@@ -305,6 +327,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   isInitialized.value = false
+  if (orbitTimer) { clearTimeout(orbitTimer); orbitTimer = null }
   window.removeEventListener('keydown', onKeyDown)
   renderer.dispose()
   audio.dispose()
@@ -495,7 +518,7 @@ onUnmounted(() => {
 
     <!-- Orbit success screen -->
     <Transition name="fade">
-      <div v-if="state.phase === 'orbit'" class="result-overlay success">
+      <div v-if="orbitReached" class="result-overlay success">
         <div class="result-content">
           <div class="result-title">ORBIT ACHIEVED</div>
           <div class="result-stats">
@@ -580,7 +603,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 24px 12px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.6) 70%, transparent 100%);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.85) 30%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0.2) 75%, rgba(0, 0, 0, 0.05) 90%, transparent 100%);
+  padding-top: 40px;
   z-index: 10;
 }
 
@@ -605,7 +629,7 @@ onUnmounted(() => {
 /* === STAGE LABELS === */
 .stage-label {
   position: absolute;
-  bottom: -16px;
+  top: -14px;
   left: 50%;
   transform: translateX(-50%);
   font-family: var(--font-mono);

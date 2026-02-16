@@ -325,14 +325,15 @@ export function useParticles() {
     }
   }
 
-  // ── Pre-ignition water deluge steam (T-3 to T-0) ──
+  // ── Pre-ignition water deluge steam (T-6 to T-0, continues until SPACE) ──
 
   function emitPreIgnitionSteam(countdown: number, started: boolean, dt: number) {
     if (!started) return
-    if (countdown > 3 || countdown <= 0) return
+    if (countdown > 6) return
 
-    const intensity = 1 - countdown / 3
-    const rate = 120 * intensity
+    // Gentle ramp-up: starts subtle, builds toward T-0
+    const intensity = Math.min(1, (6 - countdown) / 6)
+    const rate = 30 + 60 * intensity
     const count = Math.floor(rate * dt + Math.random())
 
     for (let i = 0; i < count; i++) {
@@ -341,16 +342,17 @@ export function useParticles() {
       p.active = true
       p.age = 0
       p.maxAge = 3 + Math.random() * 5
-      p.size = 10 + Math.random() * 25
+      // Start small, grow slightly as countdown progresses
+      p.size = (2 + Math.random() * 4) * (1 + intensity * 1.5)
 
-      p.x = (Math.random() - 0.5) * 20
-      p.y = Math.random() * 3
-      p.z = (Math.random() - 0.5) * 20
+      p.x = (Math.random() - 0.5) * 10
+      p.y = Math.random() * 2
+      p.z = (Math.random() - 0.5) * 10
 
       const angle = Math.random() * Math.PI * 2
-      const outSpeed = 3 + Math.random() * 10
+      const outSpeed = 2 + Math.random() * 6 * (1 + intensity)
       p.vx = Math.cos(angle) * outSpeed
-      p.vy = 2 + Math.random() * 8
+      p.vy = 1.5 + Math.random() * 5
       p.vz = Math.sin(angle) * outSpeed
     }
   }
@@ -358,66 +360,69 @@ export function useParticles() {
   // ── Ignition burst: massive one-time explosion of fire + clouds ──
 
   function emitIgnitionBurst(nozzleY: number) {
-    // Fire burst — intense orange/white fireball
+    // Fire burst — deflects off flame trench, spreads outward and down
     for (let i = 0; i < 150; i++) {
       const p = findSlot(firePool)
       if (!p) break
       p.active = true
       p.age = 0
-      p.maxAge = 0.2 + Math.random() * 0.7
-      p.size = 12 + Math.random() * 25
+      p.maxAge = 0.15 + Math.random() * 0.5
+      p.size = 6 + Math.random() * 14
 
       const angle = Math.random() * Math.PI * 2
-      const radiusXZ = Math.random() * 8
+      const radiusXZ = Math.random() * 5
       p.x = Math.cos(angle) * radiusXZ
-      p.y = nozzleY + (Math.random() - 0.3) * 5
+      p.y = nozzleY - Math.random() * 3
       p.z = Math.sin(angle) * radiusXZ
 
-      const outSpeed = 15 + Math.random() * 35
-      p.vx = Math.cos(angle) * outSpeed * (0.5 + Math.random())
-      p.vy = -8 + Math.random() * 22
-      p.vz = Math.sin(angle) * outSpeed * (0.5 + Math.random())
+      // Primarily outward and downward — flame trench deflection
+      const outSpeed = 20 + Math.random() * 40
+      p.vx = Math.cos(angle) * outSpeed * (0.6 + Math.random())
+      p.vy = -(5 + Math.random() * 15) + Math.random() * 8
+      p.vz = Math.sin(angle) * outSpeed * (0.6 + Math.random())
     }
 
-    // Steam/water deluge cloud — staggered ages so they don't vanish together
-    for (let i = 0; i < 300; i++) {
+    // Steam/water deluge — exhaust deflects sideways and downward from pad
+    for (let i = 0; i < 400; i++) {
       const p = findSlot(steamPool)
       if (!p) break
       p.active = true
-      p.age = Math.random() * 2  // Stagger start so they fade at different times
-      p.maxAge = 10 + Math.random() * 20
-      p.size = 35 + Math.random() * 65
+      p.age = Math.random() * 1.5
+      p.maxAge = 6 + Math.random() * 12
+      p.size = 15 + Math.random() * 35
 
       const angle = Math.random() * Math.PI * 2
-      const radiusXZ = Math.random() * 18
+      const radiusXZ = 2 + Math.random() * 12
       p.x = Math.cos(angle) * radiusXZ
-      p.y = Math.random() * 6
+      p.y = Math.random() * 3
       p.z = Math.sin(angle) * radiusXZ
 
-      const outSpeed = 8 + Math.random() * 20
+      // Strong outward, slight downward — ground deflection
+      const outSpeed = 12 + Math.random() * 30
       p.vx = Math.cos(angle) * outSpeed
-      p.vy = 3 + Math.random() * 15
+      p.vy = -(1 + Math.random() * 4) + Math.random() * 6
       p.vz = Math.sin(angle) * outSpeed
     }
 
-    // Smoke burst — staggered ages
-    for (let i = 0; i < 200; i++) {
+    // Smoke — hugs the ground and spreads outward
+    for (let i = 0; i < 250; i++) {
       const p = findSlot(smokePool)
       if (!p) break
       p.active = true
-      p.age = Math.random() * 2
-      p.maxAge = 10 + Math.random() * 18
-      p.size = 20 + Math.random() * 55
+      p.age = Math.random() * 1.5
+      p.maxAge = 8 + Math.random() * 14
+      p.size = 12 + Math.random() * 30
 
       const angle = Math.random() * Math.PI * 2
-      const radiusXZ = Math.random() * 22
+      const radiusXZ = 3 + Math.random() * 18
       p.x = Math.cos(angle) * radiusXZ
-      p.y = Math.random() * 8
+      p.y = Math.random() * 4
       p.z = Math.sin(angle) * radiusXZ
 
-      const outSpeed = 5 + Math.random() * 18
+      // Outward along ground, very little upward
+      const outSpeed = 8 + Math.random() * 18
       p.vx = Math.cos(angle) * outSpeed
-      p.vy = 3 + Math.random() * 12
+      p.vy = Math.random() * 5
       p.vz = Math.sin(angle) * outSpeed
     }
   }
@@ -687,10 +692,13 @@ export function useParticles() {
     const { nozzleWorldY, rocketBaseY, throttle, fuel, altitude, phase, stage, dt, countdown, started } = config
     const engineOn = throttle > 0 && fuel > 0
 
-    // Pre-launch effects
+    // Pre-launch effects (venting + deluge steam until player launches)
     if (phase === 'pre-launch') {
       emitVent(rocketBaseY, countdown, started, dt)
       emitPreIgnitionSteam(countdown, started, dt)
+    } else if (!hasIgnited) {
+      // Countdown reached 0 but player hasn't pressed SPACE yet — keep steaming
+      emitPreIgnitionSteam(0, true, dt)
     }
 
     // Detect ignition — one-time massive burst

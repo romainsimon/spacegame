@@ -8,7 +8,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { useParticles } from './useParticles'
 import type { FlightData, GameState } from '~/types/game'
 
-const EARTH_VISUAL_RADIUS = 30000
+const EARTH_VISUAL_RADIUS = 150000
 
 // Falcon 9 model constants
 const MODEL_SCALE = 2.25
@@ -17,8 +17,11 @@ const MODEL_ROCKET_BASE_Y = 0.5  // Y of rocket base in model coords
 const MODEL_PAD_XZ_THRESHOLD = 6 // Meshes wider than this → pad/tower
 
 function altitudeToVisual(altitude: number): number {
-  if (altitude < 1000) return altitude
-  return 1000 + Math.log10(altitude / 1000) * 2000
+  // Linear up to 5 km — Earth looks flat, realistic ground phase
+  if (altitude < 5000) return altitude
+  // Gentle log compression above — orbit (200 km) → ~10,000 visual units
+  // Ratio to Earth radius: 10k / 150k ≈ 6.7% (real is 3.1%, close enough for gameplay)
+  return 5000 + Math.log10(altitude / 5000) * 3200
 }
 
 // ── Renderer ────────────────────────────────────────────────────────
@@ -72,6 +75,8 @@ export function useRenderer() {
   // State
   let countdownZoom = 1
   let cloudTime = 0
+  let shakeTime = 0
+  let separationOffset = 0
 
   // ── Init ──────────────────────────────────────────────────────────
 
@@ -260,10 +265,10 @@ export function useRenderer() {
         void main() {
           vec3 viewDir = normalize(cameraPosition - vWorldPosition);
           float fresnel = 1.0 - max(0.0, dot(vNormal, viewDir));
-          float intensity = pow(fresnel, 4.0);
-          float sunFacing = max(0.0, dot(vNormal, sunDirection) + 0.3);
-          vec3 color = vec3(0.35, 0.65, 1.0);
-          gl_FragColor = vec4(color * intensity * sunFacing, intensity * 0.7);
+          float intensity = pow(fresnel, 5.0) * 0.5;
+          float sunFacing = max(0.0, dot(vNormal, sunDirection) + 0.2);
+          vec3 color = vec3(0.3, 0.55, 1.0);
+          gl_FragColor = vec4(color * intensity * sunFacing, intensity * 0.4);
         }
       `,
       transparent: true,
@@ -287,6 +292,24 @@ export function useRenderer() {
     // UV2 needed for aoMap
     geo.setAttribute('uv2', geo.getAttribute('uv').clone())
 
+    // Radial alpha map — fully opaque in center, fades to transparent at edges
+    const alphaSize = 256
+    const alphaCanvas = document.createElement('canvas')
+    alphaCanvas.width = alphaSize
+    alphaCanvas.height = alphaSize
+    const actx = alphaCanvas.getContext('2d')!
+    const grad = actx.createRadialGradient(
+      alphaSize / 2, alphaSize / 2, 0,
+      alphaSize / 2, alphaSize / 2, alphaSize / 2,
+    )
+    grad.addColorStop(0, '#ffffff')
+    grad.addColorStop(0.65, '#ffffff')
+    grad.addColorStop(0.9, '#888888')
+    grad.addColorStop(1.0, '#000000')
+    actx.fillStyle = grad
+    actx.fillRect(0, 0, alphaSize, alphaSize)
+    const alphaTex = new THREE.CanvasTexture(alphaCanvas)
+
     const loader = new THREE.TextureLoader()
 
     const colorTex = loader.load('/textures/launch/launch-site.jpg')
@@ -307,6 +330,8 @@ export function useRenderer() {
       displacementBias: -0.35,
       aoMap: aoTex,
       aoMapIntensity: 0.6,
+      alphaMap: alphaTex,
+      transparent: true,
       roughness: 0.85,
       metalness: 0.0,
     })
@@ -321,83 +346,7 @@ export function useRenderer() {
 
   function buildLaunchSite() {
     launchSiteGroup = new THREE.Group()
-
-    // Pad (raised platform)
-    const padGeo = new THREE.CylinderGeometry(20, 20, 1, 32)
-    const padMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.8, metalness: 0.1 })
-    const pad = new THREE.Mesh(padGeo, padMat)
-    pad.position.y = 0.5
-    pad.receiveShadow = true
-    pad.castShadow = true
-    launchSiteGroup.add(pad)
-
-    // Pad marking
-    const markGeo = new THREE.RingGeometry(8, 9, 32)
-    const markMat = new THREE.MeshStandardMaterial({ color: 0xcccc00, roughness: 0.5 })
-    const marking = new THREE.Mesh(markGeo, markMat)
-    marking.rotation.x = -Math.PI / 2
-    marking.position.y = 1.02
-    launchSiteGroup.add(marking)
-
-    // Flame trench
-    const trenchGeo = new THREE.BoxGeometry(12, 3, 30)
-    const trenchMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 })
-    const trench = new THREE.Mesh(trenchGeo, trenchMat)
-    trench.position.set(0, -1, 15)
-    trench.receiveShadow = true
-    launchSiteGroup.add(trench)
-
-    // Launch tower
-    const towerMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.6, metalness: 0.3 })
-    const towerGeo = new THREE.BoxGeometry(3, 80, 3)
-    const tower = new THREE.Mesh(towerGeo, towerMat)
-    tower.position.set(25, 40, 0)
-    tower.castShadow = true
-    launchSiteGroup.add(tower)
-
-    const armGeo = new THREE.BoxGeometry(20, 2, 2)
-    const arm = new THREE.Mesh(armGeo, towerMat)
-    arm.position.set(15, 55, 0)
-    arm.castShadow = true
-    launchSiteGroup.add(arm)
-
-    // Tower lattice braces
-    for (let i = 0; i < 6; i++) {
-      const braceGeo = new THREE.BoxGeometry(0.3, 0.3, 4)
-      const brace = new THREE.Mesh(braceGeo, towerMat)
-      brace.position.set(25, 8 + i * 12, 0)
-      brace.rotation.y = ((i % 2) * 2 - 1) * 0.5
-      launchSiteGroup.add(brace)
-    }
-
-    // Buildings
-    for (let i = 0; i < 5; i++) {
-      const bGeo = new THREE.BoxGeometry(8 + Math.random() * 12, 4 + Math.random() * 6, 8 + Math.random() * 12)
-      const bMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.7 })
-      const building = new THREE.Mesh(bGeo, bMat)
-      const angle = (i / 5) * Math.PI * 2 + 0.5
-      const dist = 80 + Math.random() * 60
-      building.position.set(Math.cos(angle) * dist, building.geometry.parameters.height / 2, Math.sin(angle) * dist)
-      building.castShadow = true
-      building.receiveShadow = true
-      launchSiteGroup.add(building)
-    }
-
-    // Water tower
-    const wtGeo = new THREE.CylinderGeometry(2, 2, 20, 12)
-    const wtMat = new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 0.5 })
-    const wt = new THREE.Mesh(wtGeo, wtMat)
-    wt.position.set(-35, 10, 20)
-    wt.castShadow = true
-    launchSiteGroup.add(wt)
-
-    const tankGeo = new THREE.SphereGeometry(4, 12, 10)
-    const tankMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.4 })
-    const tank = new THREE.Mesh(tankGeo, tankMat)
-    tank.position.set(-35, 22, 20)
-    tank.castShadow = true
-    launchSiteGroup.add(tank)
-
+    // Empty — 3D model provides pad/tower geometry via loadFalcon9Model()
     launchSiteGroup.visible = false
     scene.add(launchSiteGroup)
   }
@@ -410,77 +359,10 @@ export function useRenderer() {
     stage2Group = new THREE.Group()
     flameGroup = new THREE.Group()
 
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 0.3, metalness: 0.1 })
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5, metalness: 0.4 })
-    const interstgMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.3 })
-
-    // === STAGE 1 ===
-    const s1BodyGeo = new THREE.CylinderGeometry(1.83, 1.83, 40, 24)
-    const s1Body = new THREE.Mesh(s1BodyGeo, bodyMat)
-    s1Body.position.y = 20
-    s1Body.castShadow = true
-    stage1Group.add(s1Body)
-
-    for (let i = 0; i < 4; i++) {
-      const legGeo = new THREE.BoxGeometry(0.2, 12, 0.4)
-      const leg = new THREE.Mesh(legGeo, darkMat)
-      const angle = (i / 4) * Math.PI * 2
-      leg.position.set(Math.cos(angle) * 2.0, 6, Math.sin(angle) * 2.0)
-      leg.rotation.z = Math.cos(angle) * 0.15
-      leg.rotation.x = Math.sin(angle) * 0.15
-      leg.castShadow = true
-      stage1Group.add(leg)
-    }
-
-    for (let i = 0; i < 4; i++) {
-      const finGeo = new THREE.BoxGeometry(2.5, 1.5, 0.15)
-      const fin = new THREE.Mesh(finGeo, darkMat)
-      const angle = (i / 4) * Math.PI * 2 + Math.PI / 4
-      fin.position.set(Math.cos(angle) * 2.5, 37, Math.sin(angle) * 2.5)
-      fin.rotation.y = angle
-      fin.castShadow = true
-      stage1Group.add(fin)
-    }
-
-    const nozzleGeo = new THREE.CylinderGeometry(0.25, 0.4, 1.5, 12)
-    const centerNozzle = new THREE.Mesh(nozzleGeo, darkMat)
-    centerNozzle.position.y = -0.75
-    stage1Group.add(centerNozzle)
-    for (let i = 0; i < 8; i++) {
-      const nozzle = new THREE.Mesh(nozzleGeo, darkMat)
-      const angle = (i / 8) * Math.PI * 2
-      nozzle.position.set(Math.cos(angle) * 1.0, -0.75, Math.sin(angle) * 1.0)
-      stage1Group.add(nozzle)
-    }
-
-    const interGeo = new THREE.CylinderGeometry(1.83, 1.83, 4, 24)
-    const inter = new THREE.Mesh(interGeo, interstgMat)
-    inter.position.y = 42
-    stage1Group.add(inter)
-
+    // Empty groups — 3D model populates these via loadFalcon9Model()
     stage1Group.visible = false
-    rocketGroup.add(stage1Group)
-
-    // === STAGE 2 ===
-    const s2BodyGeo = new THREE.CylinderGeometry(1.83, 1.83, 12, 24)
-    const s2Body = new THREE.Mesh(s2BodyGeo, bodyMat)
-    s2Body.position.y = 50
-    s2Body.castShadow = true
-    stage2Group.add(s2Body)
-
-    const mvacGeo = new THREE.CylinderGeometry(0.3, 0.8, 2.5, 12)
-    const mvac = new THREE.Mesh(mvacGeo, darkMat)
-    mvac.position.y = 42.75
-    stage2Group.add(mvac)
-
-    const fairingGeo = new THREE.ConeGeometry(1.83, 8, 24)
-    const fairingMat = new THREE.MeshStandardMaterial({ color: 0xe8e8e8, roughness: 0.35, metalness: 0.05 })
-    const fairing = new THREE.Mesh(fairingGeo, fairingMat)
-    fairing.position.y = 60
-    fairing.castShadow = true
-    stage2Group.add(fairing)
-
     stage2Group.visible = false
+    rocketGroup.add(stage1Group)
     rocketGroup.add(stage2Group)
 
     // === ENGINE FLAME (additive glow core — tall columnar plume) ===
@@ -562,9 +444,9 @@ export function useRenderer() {
 
         const float PI = 3.14159265;
         const float EARTH_R = 6371e3;
-        const float ATMOS_R = 6471e3;
+        const float ATMOS_R = 6531e3;  // 160 km atmosphere for gradual fade
         const vec3 BETA_R = vec3(5.5e-6, 13.0e-6, 22.4e-6);
-        const float BETA_M = 25e-6;
+        const float BETA_M = 21e-6;
         const float HR = 8500.0;
         const float HM = 1200.0;
         const float SUN_I = 30.0;
@@ -611,7 +493,7 @@ export function useRenderer() {
 
             float pathLen = maxDist - ta.x;
             if (pathLen > 0.0) {
-              const int STEPS = 8;
+              const int STEPS = 12;
               float stepLen = pathLen / float(STEPS);
 
               vec3 totalR = vec3(0.0);
@@ -626,12 +508,12 @@ export function useRenderer() {
                 odR += hr;
                 odM += hm;
 
-                // Light optical depth toward sun (4 steps)
+                // Light optical depth toward sun (6 steps)
                 vec2 tl = raySphere(pos, sunDirection, ATMOS_R);
-                float slLen = tl.y / 4.0;
+                float slLen = tl.y / 6.0;
                 float lodR = 0.0, lodM = 0.0;
 
-                for (int j = 0; j < 4; j++) {
+                for (int j = 0; j < 6; j++) {
                   vec3 pl = pos + sunDirection * ((float(j) + 0.5) * slLen);
                   float hl = length(pl) - EARTH_R;
                   lodR += exp(-hl / HR) * slLen;
@@ -946,10 +828,19 @@ export function useRenderer() {
     // Rocket axis in model world-space (from inspection)
     const ROCKET_AXIS_X = -0.1
     const ROCKET_AXIS_Z = -0.7
-    // Tight radius: all actual rocket meshes are within dist 0.92 of axis.
-    // Structural elements (crane hooks, brackets) start at dist ~1.88.
-    const AXIS_RADIUS = 1.2
-    let s2MinY = Infinity
+    const AXIS_RADIUS = 1.5
+
+    // First pass: identify rocket meshes and compute total height
+    interface MeshInfo {
+      mesh: THREE.Mesh
+      box: THREE.Box3
+      center: THREE.Vector3
+      size: THREE.Vector3
+      isRocket: boolean
+    }
+    const meshInfos: MeshInfo[] = []
+    let rocketMinY = Infinity
+    let rocketMaxY = -Infinity
 
     gltf.scene.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return
@@ -961,10 +852,29 @@ export function useRenderer() {
       box.getCenter(center)
       box.getSize(size)
 
-      // Clone and bake world transform into geometry
-      const clone = mesh.clone()
-      clone.geometry = mesh.geometry.clone()
-      clone.geometry.applyMatrix4(mesh.matrixWorld)
+      const distFromAxis = Math.sqrt(
+        (center.x - ROCKET_AXIS_X) ** 2 + (center.z - ROCKET_AXIS_Z) ** 2,
+      )
+      const maxXZSize = Math.max(size.x, size.z)
+      const isRocket = distFromAxis <= AXIS_RADIUS && maxXZSize < MODEL_PAD_XZ_THRESHOLD && box.max.y > 0.5
+
+      meshInfos.push({ mesh, box, center, size, isRocket })
+      if (isRocket) {
+        if (box.min.y < rocketMinY) rocketMinY = box.min.y
+        if (box.max.y > rocketMaxY) rocketMaxY = box.max.y
+      }
+    })
+
+    // Auto-compute interstage split: Falcon 9 S1 is ~61% of total height
+    const rocketHeight = rocketMaxY - rocketMinY
+    const interstageY = rocketMinY + rocketHeight * 0.61
+    let s2MinY = Infinity
+
+    // Second pass: classify by Y position and add to groups
+    for (const info of meshInfos) {
+      const clone = info.mesh.clone()
+      clone.geometry = info.mesh.geometry.clone()
+      clone.geometry.applyMatrix4(info.mesh.matrixWorld)
       clone.position.set(0, 0, 0)
       clone.quaternion.identity()
       clone.scale.set(1, 1, 1)
@@ -972,29 +882,18 @@ export function useRenderer() {
       clone.castShadow = true
       clone.receiveShadow = true
 
-      // Distance from rocket center axis in XZ plane
-      const distFromAxis = Math.sqrt(
-        (center.x - ROCKET_AXIS_X) ** 2 + (center.z - ROCKET_AXIS_Z) ** 2,
-      )
-
-      // Max extent in XZ — rocket body tubes are narrow (<5 units)
-      const maxXZSize = Math.max(size.x, size.z)
-
-      // Classification: only narrow parts right on the rocket axis are rocket.
-      // Everything else (tower, strongback, arm, pad) stays on ground.
-      if (distFromAxis <= AXIS_RADIUS && maxXZSize < 5 && box.max.y > 0.5) {
-        const stage = center.y >= MODEL_INTERSTAGE_Y ? 'S2' : 'S1'
-        console.log(`[ROCKET] ${stage} | name=${mesh.name} centerY=${center.y.toFixed(2)} minY=${box.min.y.toFixed(2)} maxY=${box.max.y.toFixed(2)} dist=${distFromAxis.toFixed(2)}`)
-        if (center.y >= MODEL_INTERSTAGE_Y) {
+      if (info.isRocket) {
+        // Y-based: mesh center above interstage → S2, otherwise → S1
+        if (info.center.y >= interstageY) {
           s2Group.add(clone)
-          if (box.min.y < s2MinY) s2MinY = box.min.y
+          if (info.box.min.y < s2MinY) s2MinY = info.box.min.y
         } else {
           s1Group.add(clone)
         }
       } else {
         padGroup.add(clone)
       }
-    })
+    }
 
     // Compute offset so rocket base aligns to Y=0 in game coords
     const baseOffset = -MODEL_ROCKET_BASE_Y * MODEL_SCALE
@@ -1049,7 +948,9 @@ export function useRenderer() {
         stage1Group.visible = true
       }
       flameGroup.position.y = 0
+      flameGroup.position.x = -1.2
       flameMesh.position.y = -19.5
+      separationOffset = 0
       particles.reset()
     }
 
@@ -1107,18 +1008,27 @@ export function useRenderer() {
     if (flameOn) {
       const flicker = 0.85 + Math.random() * 0.3
       const throttleScale = 0.5 + flight.throttle * 0.5
-      flameMesh.scale.set(
-        throttleScale * flicker,
-        throttleScale * flicker * (flight.stage === 1 ? 1.0 : 0.6),
-        throttleScale * flicker,
-      )
-      ;(flameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
 
-      if (flight.stage === 2) {
+      if (flight.stage === 1) {
+        flameMesh.scale.set(
+          throttleScale * flicker,
+          throttleScale * flicker,
+          throttleScale * flicker,
+        )
+      } else {
+        // MVac: single engine, narrower nozzle, vacuum-expanded plume
+        flameMesh.scale.set(
+          throttleScale * flicker * 0.4,
+          throttleScale * flicker * 0.5,
+          throttleScale * flicker * 0.4,
+        )
         const s2FlameY = modelLoaded ? s2NozzleLocalY : 42
         flameGroup.position.y = s2FlameY
-        flameMesh.position.y = -12
+        flameGroup.position.x = 0
+        flameMesh.position.y = -10
       }
+
+      ;(flameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
     }
 
     // ── Fire light ──
@@ -1154,7 +1064,7 @@ export function useRenderer() {
       if (modelLoaded && loadedRocketS1) loadedRocketS1.visible = false
       else stage1Group.visible = false
       const stage1VisualAlt = altitudeToVisual(stage1Flight.altitude)
-      separatedStage1.position.y = 0.5 + stage1VisualAlt
+      separatedStage1.position.y = 0.5 + stage1VisualAlt - separationOffset
       updateStage1Camera(stage1Flight)
     } else if (phase === 'stage2-flight' || phase === 'seco' || phase === 'orbit') {
       if (modelLoaded && loadedRocketS1) loadedRocketS1.visible = false
@@ -1191,7 +1101,7 @@ export function useRenderer() {
       const maxAlt = stage1Flight
         ? Math.max(flight.altitude, stage1Flight.altitude)
         : flight.altitude
-      const starOpacity = Math.min(1, maxAlt / 80000)
+      const starOpacity = Math.min(1, maxAlt / 120000)
       ;(starsMesh.material as THREE.PointsMaterial).opacity = starOpacity
       ;(starsMesh.material as THREE.PointsMaterial).transparent = true
     }
@@ -1240,6 +1150,16 @@ export function useRenderer() {
 
     const lookTarget = new THREE.Vector3(0, lookY, 0)
     camera.lookAt(lookTarget)
+
+    // Subtle camera shake during low-altitude powered flight
+    if (flight.throttle > 0 && flight.altitude < 2000 && !isSplit) {
+      shakeTime += 0.1
+      const intensity = Math.max(0, 1 - flight.altitude / 2000) * 0.6
+      const shakeX = Math.sin(shakeTime * 31.7) * intensity + Math.sin(shakeTime * 47.3) * intensity * 0.5
+      const shakeY = Math.sin(shakeTime * 37.1) * intensity + Math.cos(shakeTime * 53.9) * intensity * 0.4
+      camera.position.x += shakeX
+      camera.position.y += shakeY
+    }
   }
 
   function updateStage1Camera(stage1Flight: FlightData) {
@@ -1272,31 +1192,34 @@ export function useRenderer() {
   }
 
   function triggerStageSeparation(_flight: FlightData) {
+    // Instant visual separation gap
+    separationOffset = 15
+
     if (modelLoaded && loadedRocketS1) {
       // Clone loaded S1 as separated piece
       separatedStage1 = loadedRocketS1.clone()
-      // Create a wrapper group at the correct world position
       const wrapper = new THREE.Group()
       wrapper.add(separatedStage1)
       separatedStage1 = wrapper
-      separatedStage1.position.y = rocketGroup.position.y
+      separatedStage1.position.y = rocketGroup.position.y - separationOffset
       scene.add(separatedStage1)
 
       loadedRocketS1.visible = false
-      const s2FlameY = s2NozzleLocalY
-      flameGroup.position.y = s2FlameY
-      flameMesh.position.y = -3
+      flameGroup.position.y = s2NozzleLocalY
+      flameGroup.position.x = 0
+      flameMesh.position.y = -10
 
       stage1Camera.position.copy(camera.position)
       stage1Camera.quaternion.copy(camera.quaternion)
     } else if (stage1Group.visible) {
       separatedStage1 = stage1Group.clone()
-      separatedStage1.position.y = rocketGroup.position.y
+      separatedStage1.position.y = rocketGroup.position.y - separationOffset
       scene.add(separatedStage1)
 
       stage1Group.visible = false
       flameGroup.position.y = 42
-      flameMesh.position.y = -3
+      flameGroup.position.x = 0
+      flameMesh.position.y = -10
 
       stage1Camera.position.copy(camera.position)
       stage1Camera.quaternion.copy(camera.quaternion)

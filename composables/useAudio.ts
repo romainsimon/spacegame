@@ -15,8 +15,12 @@ interface VoiceCue {
 
 // Time-triggered voice cues: [missionTime threshold, cue id]
 const TIME_CUES: [number, string][] = [
+  [-16, 'missionControl'],
   [-15, '15_seconds'],
   [-10, 'countdown'],
+  [20, 'trajectoryNominal'],
+  [161, 'ses1'],
+  [170, 'goodData'],
 ]
 
 const EVENT_CUES: [string, string][] = [
@@ -74,6 +78,12 @@ export function useAudio() {
       maxq: '/sounds/voice/max-q.mp3',
       meco: '/sounds/voice/meco.mp3',
       stageSep: '/sounds/voice/stage-separation-confirmed.mp3',
+      missionControl: '/sounds/voice/mission-control-prepare-for-launch-sequence.mp3',
+      trajectoryNominal: '/sounds/voice/trajectory_nominal.mp3',
+      ses1: '/sounds/voice/second-stage-ignition.mp3',
+      goodData: '/sounds/voice/good-data-across-the-board.mp3',
+      seco: '/sounds/voice/seco.mp3',
+      orbitSuccess: '/sounds/voice/orbit-solid-congrats-enjoy-view.mp3',
       problem: '/sounds/voice/problem/execute-abort-procedure.mp3',
     }
 
@@ -142,6 +152,8 @@ export function useAudio() {
     layer.source = src
   }
 
+  const activeVoiceSources: AudioBufferSourceNode[] = []
+
   function playVoice(id: string) {
     if (!ctx || !voiceGain || muted) return
     const cue = voices[id]
@@ -151,7 +163,20 @@ export function useAudio() {
     const src = ctx.createBufferSource()
     src.buffer = cue.buffer
     src.connect(voiceGain)
+    src.onended = () => {
+      const idx = activeVoiceSources.indexOf(src)
+      if (idx >= 0) activeVoiceSources.splice(idx, 1)
+    }
     src.start(0)
+    activeVoiceSources.push(src)
+  }
+
+  /** Stop all currently playing voice cues (e.g. on fast-forward) */
+  function stopVoices() {
+    for (const src of activeVoiceSources) {
+      try { src.stop() } catch {}
+    }
+    activeVoiceSources.length = 0
   }
 
   function resume() {
@@ -202,6 +227,10 @@ export function useAudio() {
         layer.targetVolume = 0
       }
     } else {
+      // Stage 2 in space: much quieter — only faint rumble through structure
+      const isStage2 = phase === 'stage2-flight' || phase === 'seco'
+      const stageMul = isStage2 ? 0.2 : 1.0
+
       // Altitude crossfade: loud engine → space engine
       const altFactor = Math.min(1, flight.altitude / 80000)
 
@@ -210,17 +239,17 @@ export function useAudio() {
       const launchBoost = launchProximity * launchProximity * 0.5
 
       // Primary engine: loud at launch, crossfades out with altitude
-      layers.loudEngine.targetVolume = (1 - altFactor) * (0.65 + launchBoost)
+      layers.loudEngine.targetVolume = (1 - altFactor) * (0.65 + launchBoost) * stageMul
       // Space engine: crossfades in with altitude
-      layers.spaceEngine.targetVolume = altFactor * 0.45
+      layers.spaceEngine.targetVolume = altFactor * 0.45 * stageMul
 
       // Ambient texture layers (lower volume, complement the main engines)
-      layers.atmosphere.targetVolume = (1 - altFactor) * (0.15 + launchBoost * 0.3)
-      layers.highAltitude.targetVolume = altFactor * 0.12
+      layers.atmosphere.targetVolume = (1 - altFactor) * (0.15 + launchBoost * 0.3) * stageMul
+      layers.highAltitude.targetVolume = altFactor * 0.12 * stageMul
 
       const maxQBoost = phase === 'max-q' ? 0.08 : 0
-      layers.noise.targetVolume = 0.08 + maxQBoost + launchBoost * 0.3
-      layers.highNoise.targetVolume = Math.min(1, flight.dynamicPressure / 30000) * 0.12 + launchBoost * 0.2
+      layers.noise.targetVolume = (0.08 + maxQBoost + launchBoost * 0.3) * stageMul
+      layers.highNoise.targetVolume = (Math.min(1, flight.dynamicPressure / 30000) * 0.12 + launchBoost * 0.2) * stageMul
     }
 
     // Smooth volume transitions
@@ -302,6 +331,11 @@ export function useAudio() {
     }, 1500)
   }
 
+  /** Play launch sequence announcement (before countdown starts) */
+  function playLaunchSequence() {
+    playVoice('missionControl')
+  }
+
   /** Play launch music — called at ignition */
   function playMusic() {
     startMusic('to-the-stars')
@@ -325,6 +359,16 @@ export function useAudio() {
   /** Play stage separation voice cue (called from game page) */
   function playStageSep() {
     playVoice('stageSep')
+  }
+
+  /** Play SECO voice cue */
+  function playSeco() {
+    playVoice('seco')
+  }
+
+  /** Play orbit success voice cue */
+  function playOrbitSuccess() {
+    playVoice('orbitSuccess')
   }
 
   /** Play problem voice cue (called on mission failure) */
@@ -388,10 +432,14 @@ export function useAudio() {
     init,
     resume,
     update,
+    playLaunchSequence,
     playIgnition,
     playMusic,
     playStageSep,
+    playSeco,
+    playOrbitSuccess,
     playProblem,
+    stopVoices,
     resetCues,
     toggleMute,
     isMuted,
