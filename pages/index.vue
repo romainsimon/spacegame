@@ -212,7 +212,7 @@ function toggleFastForward() {
     if (m.time <= t + 2) continue
     const buffer = playerInputIds.has(m.id) ? 8 : 2
     ffTarget.value = m.time - buffer
-    timeScale.value = 8
+    timeScale.value = 10
     return
   }
 }
@@ -269,7 +269,7 @@ function gameLoop(timestamp: number) {
   audio.update(state.value.flight, state.value.phase, state.value.countdown)
 
   // Update 3D scene
-  renderer.updateScene(state.value, started.value, dt)
+  renderer.updateScene(state.value, started.value, dt, audioStarted.value)
   renderer.render()
 
   requestAnimationFrame(gameLoop)
@@ -277,12 +277,13 @@ function gameLoop(timestamp: number) {
 
 // Primary action (space key / tap)
 function handleAction() {
-  // First press: init audio and play launch sequence voice
+  // First press: init audio, play launch sequence voice, start walkway retraction
   if (!audioStarted.value) {
     audio.init()
     audio.resume()
     audioStarted.value = true
     audio.playLaunchSequence()
+    audio.playWalkwayRotate()
     return
   }
 
@@ -305,6 +306,7 @@ function handleAction() {
   if (result.separated) {
     renderer.triggerStageSeparation(state.value.flight)
     audio.playStageSep()
+    audio.playStageSeparationSfx()
   }
 
   // Detect SECO → orbit transition: play cue + delay success screen
@@ -1346,8 +1348,8 @@ onUnmounted(() => {
     padding: 8px 12px;
   }
 
-  /* Split mode: Stage 1 gauges float to top half */
-  .hud.hud-split .hud-left {
+  /* Split mode: Stage 2 gauges float to top half */
+  .hud.hud-split .hud-right {
     position: fixed;
     top: 12px;
     left: 0;
@@ -1356,7 +1358,7 @@ onUnmounted(() => {
     z-index: 10;
   }
 
-  .hud.hud-split .hud-left .stage-label {
+  .hud.hud-split .hud-right .stage-label {
     top: auto;
     bottom: -14px;
   }

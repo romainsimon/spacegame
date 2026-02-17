@@ -41,6 +41,10 @@ export function useAudio() {
   let musicPlaying = false
   let currentTrack = ''
 
+  // One-shot SFX
+  const sfxBuffers: Record<string, AudioBuffer | null> = {}
+  let sfxGain: GainNode | null = null
+
   // MECO tracking for "reached space" trigger
   let mecoMissionTime = -1
   let reachedSpacePlayed = false
@@ -59,6 +63,11 @@ export function useAudio() {
     voiceGain = ctx.createGain()
     voiceGain.gain.value = 1.0
     voiceGain.connect(ctx.destination)
+
+    // SFX gain node (created early so it's available before buffers load)
+    sfxGain = ctx.createGain()
+    sfxGain.gain.value = 0.08
+    sfxGain.connect(ctx.destination)
 
     // Engine loop sounds
     const loopSounds: Record<string, string> = {
@@ -127,6 +136,15 @@ export function useAudio() {
     // Load music tracks
     await Promise.all(Object.entries(musicSounds).map(async ([key, src]) => {
       musicBuffers[key] = await loadBuffer(src)
+    }))
+
+    // SFX
+    const sfxSounds: Record<string, string> = {
+      walkwayRotate: '/sounds/walkway-rotate.mp3',
+      stageSeparation: '/sounds/stage-separation.mp3',
+    }
+    await Promise.all(Object.entries(sfxSounds).map(async ([key, src]) => {
+      sfxBuffers[key] = await loadBuffer(src)
     }))
 
     // Music gain node
@@ -382,6 +400,32 @@ export function useAudio() {
     src.start(0)
   }
 
+  /** Play walkway rotation sound (one-shot, retries if buffer not yet loaded) */
+  function playWalkwayRotate() {
+    if (!ctx || !sfxGain || muted) return
+    const buffer = sfxBuffers.walkwayRotate
+    if (!buffer) {
+      // Buffer still loading — retry after a short delay
+      setTimeout(() => playWalkwayRotate(), 500)
+      return
+    }
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    src.connect(sfxGain)
+    src.start(0)
+  }
+
+  /** Play stage separation SFX (one-shot, low volume) */
+  function playStageSeparationSfx() {
+    if (!ctx || !sfxGain || muted) return
+    const buffer = sfxBuffers.stageSeparation
+    if (!buffer) return
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    src.connect(sfxGain)
+    src.start(0)
+  }
+
   function resetCues() {
     for (const cue of Object.values(voices)) {
       cue.played = false
@@ -402,9 +446,11 @@ export function useAudio() {
       }
       if (voiceGain) voiceGain.gain.value = 0
       if (musicGain) musicGain.gain.value = 0
+      if (sfxGain) sfxGain.gain.value = 0
     } else {
       if (voiceGain) voiceGain.gain.value = 1
       if (musicGain && musicPlaying) musicGain.gain.value = 0.35
+      if (sfxGain) sfxGain.gain.value = 0.08
     }
     return muted
   }
@@ -421,6 +467,7 @@ export function useAudio() {
       layer.gain.disconnect()
     }
     musicGain?.disconnect()
+    sfxGain?.disconnect()
     if (ctx) {
       ctx.close()
       ctx = null
@@ -439,6 +486,8 @@ export function useAudio() {
     playSeco,
     playOrbitSuccess,
     playProblem,
+    playWalkwayRotate,
+    playStageSeparationSfx,
     stopVoices,
     resetCues,
     toggleMute,

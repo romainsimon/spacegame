@@ -13,7 +13,7 @@ const EARTH_VISUAL_RADIUS = 150000
 // Falcon 9 model constants
 const MODEL_SCALE = 2.25
 const MODEL_INTERSTAGE_Y = 12    // Y in model coords where S1/S2 split
-const MODEL_ROCKET_BASE_Y = 0.5  // Y of rocket base in model coords
+const MODEL_ROCKET_BASE_Y = -1.0 // Y of rocket base in model coords (raised so nothing clips floor)
 const MODEL_PAD_XZ_THRESHOLD = 6 // Meshes wider than this → pad/tower
 
 function altitudeToVisual(altitude: number): number {
@@ -48,6 +48,7 @@ export function useRenderer() {
   let stage2Group: THREE.Group
   let flameGroup: THREE.Group
   let flameMesh: THREE.Mesh
+  let s2FlameMesh: THREE.Mesh
   let separatedStage1: THREE.Group | null = null
 
   // Environment
@@ -69,6 +70,12 @@ export function useRenderer() {
   let loadedPadGroup: THREE.Group | null = null
   let loadedRocketS1: THREE.Group | null = null
   let loadedRocketS2: THREE.Group | null = null
+  let supportTower: THREE.Group | null = null
+  let towerPivot: THREE.Group | null = null
+  let towerRotation = 0 // current rotation angle (radians)
+  let passerelle: THREE.Group | null = null
+  let passerellePivot: THREE.Group | null = null
+  let passerelleRotation = 0
   let modelLoaded = false
   let s2NozzleLocalY = 41.5 // updated when model loads
 
@@ -414,6 +421,71 @@ export function useRenderer() {
     flameMesh.visible = false
     flameGroup.add(flameMesh)
     flameGroup.position.x = -1.2
+
+    // === S2 VACUUM PLUME (wide bell-shaped, blue-white) ===
+    const s2FlameGeo = new THREE.SphereGeometry(1, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55)
+    const s2FlameMat = new THREE.ShaderMaterial({
+      uniforms: { time: { value: 0 } },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        void main() {
+          vUv = uv;
+          vPosition = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float time;
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        void main() {
+          // Distance from center axis (0 at core, 1 at edge)
+          float r = length(vPosition.xz);
+          float y = -vPosition.y; // flip so tip = 0, base = 1
+          float dist = length(vec2(r * 1.2, y));
+
+          // Noise flicker
+          float n = fract(sin(dot(vec2(r * 6.0 + time * 20.0, y * 4.0 + time * 12.0), vec2(127.1, 311.7))) * 43758.5453);
+          float flicker = 0.9 + 0.1 * n;
+
+          // Color: bright white-blue core → pale blue → deep blue edge
+          vec3 col;
+          float coreDist = length(vec2(r * 2.5, y * 0.8));
+          if (coreDist < 0.2) {
+            // Hot white core
+            col = vec3(0.9, 0.95, 1.0) * 3.5;
+          } else if (coreDist < 0.45) {
+            float s = (coreDist - 0.2) / 0.25;
+            col = mix(vec3(0.8, 0.9, 1.0) * 3.0, vec3(0.4, 0.6, 1.0) * 2.0, s);
+          } else if (coreDist < 0.7) {
+            float s = (coreDist - 0.45) / 0.25;
+            col = mix(vec3(0.4, 0.6, 1.0) * 2.0, vec3(0.2, 0.35, 0.8) * 1.0, s);
+          } else {
+            float s = min(1.0, (coreDist - 0.7) / 0.3);
+            col = mix(vec3(0.2, 0.35, 0.8) * 1.0, vec3(0.08, 0.12, 0.4) * 0.3, s);
+          }
+
+          // Alpha: solid core, fading at edges
+          float alpha = smoothstep(1.0, 0.15, coreDist) * 0.7 * flicker;
+
+          // Slight radial mach diamonds (concentric rings)
+          float rings = 0.9 + 0.1 * sin(coreDist * 25.0 - time * 8.0);
+          col *= rings;
+
+          gl_FragColor = vec4(col * flicker, alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    })
+    s2FlameMesh = new THREE.Mesh(s2FlameGeo, s2FlameMat)
+    s2FlameMesh.rotation.x = Math.PI
+    s2FlameMesh.position.y = -12
+    s2FlameMesh.visible = false
+    flameGroup.add(s2FlameMesh)
 
     rocketGroup.add(flameGroup)
     rocketGroup.position.y = 0.5
@@ -824,6 +896,8 @@ export function useRenderer() {
     const padGroup = new THREE.Group()
     const s1Group = new THREE.Group()
     const s2Group = new THREE.Group()
+    const towerGroup = new THREE.Group()
+    const passerelleGroup = new THREE.Group()
 
     // Rocket axis in model world-space (from inspection)
     const ROCKET_AXIS_X = -0.1
@@ -842,9 +916,11 @@ export function useRenderer() {
     let rocketMinY = Infinity
     let rocketMaxY = -Infinity
 
+    const allMeshNames: string[] = []
     gltf.scene.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return
       const mesh = child as THREE.Mesh
+      allMeshNames.push(mesh.name)
 
       const box = new THREE.Box3().setFromObject(mesh)
       const center = new THREE.Vector3()
@@ -864,10 +940,11 @@ export function useRenderer() {
         if (box.max.y > rocketMaxY) rocketMaxY = box.max.y
       }
     })
+    console.log('[Model] All mesh names:', allMeshNames)
 
-    // Auto-compute interstage split: Falcon 9 S1 is ~61% of total height
+    // Auto-compute interstage split: Falcon 9 S1 + interstage is ~63% of total height
     const rocketHeight = rocketMaxY - rocketMinY
-    const interstageY = rocketMinY + rocketHeight * 0.61
+    const interstageY = rocketMinY + rocketHeight * 0.63
     let s2MinY = Infinity
 
     // Second pass: classify by Y position and add to groups
@@ -883,15 +960,20 @@ export function useRenderer() {
       clone.receiveShadow = true
 
       if (info.isRocket) {
-        // Y-based split, with override for the interstage ring connector
+        // Y-based split at interstage, with override for S2 Merlin Vacuum engine
         const isS2 = info.center.y >= interstageY
-          || info.mesh.name === 'Object_36'
+          || info.mesh.name === 'Object_3'
         if (isS2) {
           s2Group.add(clone)
           if (info.box.min.y < s2MinY) s2MinY = info.box.min.y
         } else {
           s1Group.add(clone)
         }
+      } else if (info.mesh.name === 'Support_Tower') {
+        towerGroup.add(clone)
+      } else if (info.mesh.name.toLowerCase().startsWith('passerelle')) {
+        console.log('[Model] Found passerelle part:', info.mesh.name, 'center:', info.center.toArray())
+        passerelleGroup.add(clone)
       } else {
         padGroup.add(clone)
       }
@@ -901,11 +983,37 @@ export function useRenderer() {
     const baseOffset = -MODEL_ROCKET_BASE_Y * MODEL_SCALE
 
     // Scale and position all groups
-    for (const g of [padGroup, s1Group, s2Group]) {
+    for (const g of [padGroup, s1Group, s2Group, towerGroup, passerelleGroup]) {
       g.scale.setScalar(MODEL_SCALE)
       g.position.y = baseOffset
       // Rotate 180° so tower faces away from camera
       g.rotation.y = Math.PI
+    }
+
+    // Wrap tower in a pivot at its base so it rotates away from rocket
+    towerPivot = new THREE.Group()
+    towerPivot.position.set(towerGroup.position.x, towerGroup.position.y, towerGroup.position.z)
+    towerGroup.position.set(0, 0, 0)
+    towerPivot.add(towerGroup)
+    supportTower = towerGroup
+    towerRotation = 0
+
+    // Wrap passerelle in a pivot at its tower-side end so it swings away
+    if (passerelleGroup.children.length > 0) {
+      passerelleGroup.updateMatrixWorld(true)
+      const passBox = new THREE.Box3().setFromObject(passerelleGroup)
+
+      // Pivot at tower-side end: farthest X from rocket axis, center Z
+      const pivotX = Math.abs(passBox.min.x) > Math.abs(passBox.max.x) ? passBox.min.x : passBox.max.x
+      const pivotZ = (passBox.min.z + passBox.max.z) / 2
+      console.log('[Model] Passerelle pivot at:', pivotX, pivotZ)
+
+      passerellePivot = new THREE.Group()
+      passerellePivot.position.set(pivotX, passerelleGroup.position.y, pivotZ)
+      passerelleGroup.position.set(-pivotX, 0, -pivotZ)
+      passerellePivot.add(passerelleGroup)
+      passerelle = passerelleGroup
+      passerelleRotation = 0
     }
 
     // Compute stage 2 nozzle Y in game coords
@@ -926,6 +1034,8 @@ export function useRenderer() {
 
     launchSiteGroup.visible = false
     scene.add(loadedPadGroup)
+    scene.add(towerPivot)
+    if (passerellePivot) scene.add(passerellePivot)
 
     modelLoaded = true
     dracoLoader.dispose()
@@ -933,7 +1043,7 @@ export function useRenderer() {
 
   // ── Scene update (per frame) ──────────────────────────────────────
 
-  function updateScene(state: GameState, started: boolean, dt: number) {
+  function updateScene(state: GameState, started: boolean, dt: number, audioStarted: boolean = false) {
     if (!rocketGroup) return
 
     const { flight, phase, countdown, stage1Flight } = state
@@ -952,7 +1062,12 @@ export function useRenderer() {
       flameGroup.position.y = 0
       flameGroup.position.x = -1.2
       flameMesh.position.y = -19.5
+      s2FlameMesh.visible = false
       separationOffset = 0
+      towerRotation = 0
+      if (towerPivot) towerPivot.rotation.z = 0
+      passerelleRotation = 0
+      if (passerellePivot) passerellePivot.rotation.y = 0
       particles.reset()
     }
 
@@ -1006,31 +1121,37 @@ export function useRenderer() {
 
     // ── Flame mesh ──
     const flameOn = flight.throttle > 0 && flight.fuel > 0
-    flameMesh.visible = flameOn
     if (flameOn) {
       const flicker = 0.85 + Math.random() * 0.3
       const throttleScale = 0.5 + flight.throttle * 0.5
 
       if (flight.stage === 1) {
+        flameMesh.visible = true
+        s2FlameMesh.visible = false
         flameMesh.scale.set(
           throttleScale * flicker,
           throttleScale * flicker,
           throttleScale * flicker,
         )
+        ;(flameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
       } else {
-        // MVac: single engine, narrower nozzle, vacuum-expanded plume
-        flameMesh.scale.set(
-          throttleScale * flicker * 0.4,
-          throttleScale * flicker * 0.5,
-          throttleScale * flicker * 0.4,
+        // MVac: wide vacuum-expanded blue plume
+        flameMesh.visible = false
+        s2FlameMesh.visible = true
+        const plumeScale = throttleScale * flicker
+        s2FlameMesh.scale.set(
+          plumeScale * 12,
+          plumeScale * 18,
+          plumeScale * 12,
         )
         const s2FlameY = modelLoaded ? s2NozzleLocalY : 42
         flameGroup.position.y = s2FlameY
-        flameGroup.position.x = 0
-        flameMesh.position.y = -10
+        flameGroup.position.x = -1.5
+        ;(s2FlameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
       }
-
-      ;(flameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
+    } else {
+      flameMesh.visible = false
+      s2FlameMesh.visible = false
     }
 
     // ── Fire light ──
@@ -1038,7 +1159,8 @@ export function useRenderer() {
       const fireLightY = flight.stage === 1 ? -1.5 : (modelLoaded ? s2NozzleLocalY : 41.5)
       fireLight.position.set(0, rocketGroup.position.y + fireLightY, 0)
       const flicker = 0.8 + Math.random() * 0.4
-      fireLight.intensity = flight.throttle * (flight.stage === 1 ? 12 : 4) * flicker
+      fireLight.color.setHex(flight.stage === 1 ? 0xffaa33 : 0x6688ff)
+      fireLight.intensity = flight.throttle * (flight.stage === 1 ? 12 : 6) * flicker
       fireLight.distance = flight.altitude < 500 ? 300 : 120
     } else {
       fireLight.intensity = 0
@@ -1096,6 +1218,28 @@ export function useRenderer() {
     }
     if (loadedPadGroup) {
       loadedPadGroup.visible = siteVisible
+    }
+    if (towerPivot) {
+      towerPivot.visible = siteVisible
+      // Rotate tower away after liftoff (rotates ~15° over a few seconds)
+      if (phase === 'ascending' && towerRotation < Math.PI / 12) {
+        towerRotation += dt * 0.15
+        towerPivot.rotation.z = Math.min(towerRotation, Math.PI / 12)
+      }
+    }
+    if (passerellePivot) {
+      passerellePivot.visible = siteVisible
+      // Passerelle swings away on first press (audioStarted), continues through launch
+      const maxAngle = Math.PI / 8 // ~22.5°
+      if (audioStarted && passerelleRotation < maxAngle) {
+        passerelleRotation += dt * 0.12
+        passerellePivot.rotation.y = -Math.min(passerelleRotation, maxAngle)
+        if (passerelleRotation < 0.05) {
+          console.log('[Passerelle] Rotating:', passerelleRotation.toFixed(3), 'dt:', dt.toFixed(4), 'audioStarted:', audioStarted)
+        }
+      }
+    } else if (audioStarted) {
+      console.warn('[Passerelle] pivot is null — passerelle not found in model?')
     }
 
     // Stars
@@ -1208,8 +1352,8 @@ export function useRenderer() {
 
       loadedRocketS1.visible = false
       flameGroup.position.y = s2NozzleLocalY
-      flameGroup.position.x = 0
-      flameMesh.position.y = -10
+      flameGroup.position.x = -1.5
+      flameMesh.position.y = -12
 
       stage1Camera.position.copy(camera.position)
       stage1Camera.quaternion.copy(camera.quaternion)
@@ -1220,8 +1364,8 @@ export function useRenderer() {
 
       stage1Group.visible = false
       flameGroup.position.y = 42
-      flameGroup.position.x = 0
-      flameMesh.position.y = -10
+      flameGroup.position.x = -1.5
+      flameMesh.position.y = -12
 
       stage1Camera.position.copy(camera.position)
       stage1Camera.quaternion.copy(camera.quaternion)
@@ -1249,19 +1393,19 @@ export function useRenderer() {
         // Mobile: top/bottom split
         const halfH = Math.floor((h - gap) / 2)
 
-        // Top — Stage 1
+        // Top — Stage 2
         renderer.setViewport(0, halfH + gap, w, halfH)
         renderer.setScissor(0, halfH + gap, w, halfH)
-        stage1Camera.aspect = w / halfH
-        stage1Camera.updateProjectionMatrix()
-        renderer.render(scene, stage1Camera)
-
-        // Bottom — Stage 2
-        renderer.setViewport(0, 0, w, halfH)
-        renderer.setScissor(0, 0, w, halfH)
         camera.aspect = w / halfH
         camera.updateProjectionMatrix()
         renderer.render(scene, camera)
+
+        // Bottom — Stage 1
+        renderer.setViewport(0, 0, w, halfH)
+        renderer.setScissor(0, 0, w, halfH)
+        stage1Camera.aspect = w / halfH
+        stage1Camera.updateProjectionMatrix()
+        renderer.render(scene, stage1Camera)
       } else {
         // Desktop: left/right split
         const halfW = Math.floor((w - gap) / 2)
