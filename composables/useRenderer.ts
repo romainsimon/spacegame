@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { Lensflare, LensflareElement } from 'three/examples/jsm/objects/Lensflare.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
@@ -56,15 +57,26 @@ export function useRenderer() {
   let atmosphereMesh: THREE.Mesh
   let launchSiteGroup: THREE.Group
   let skyMesh: THREE.Mesh
+  let horizonHaze: THREE.Mesh
   let starsMesh: THREE.Points
   let cloudMesh: THREE.Mesh
   let cloudMaterial: THREE.ShaderMaterial
 
   // Lights
   let sunLight: THREE.DirectionalLight
-  const sunDir = new THREE.Vector3(0.8, 0.15, 0.4).normalize()
+  const sunDir = new THREE.Vector3(-0.4, 0.03, -0.8).normalize()
   let fireLight: THREE.PointLight
   const floodLights: THREE.SpotLight[] = []
+  let ambientLight: THREE.AmbientLight
+  let hemiLight: THREE.HemisphereLight
+  let bloomPass: UnrealBloomPass
+  let sunBillboard: THREE.Mesh
+  let sunBillboardMaterial: THREE.ShaderMaterial
+  let sunLensflare: Lensflare
+
+  // Pre-allocated temporaries to avoid GC pressure
+  const _sunColor = new THREE.Color()
+  const _camForward = new THREE.Vector3()
 
   // Loaded 3D model groups
   let loadedPadGroup: THREE.Group | null = null
@@ -101,7 +113,7 @@ export function useRenderer() {
     container.appendChild(renderer.domElement)
 
     scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x08101e)
+    scene.background = new THREE.Color(0x2a1e14)
     scene.fog = new THREE.FogExp2(0x0c1830, 0.00010)
 
     camera = new THREE.PerspectiveCamera(50, containerWidth / containerHeight, 0.1, 100000)
@@ -112,14 +124,14 @@ export function useRenderer() {
     stage1Camera.position.copy(camera.position)
 
     // ── Lighting: golden hour / late dusk ──
-    const ambientLight = new THREE.AmbientLight(0x2a3858, 1.2)
+    ambientLight = new THREE.AmbientLight(0x2a3858, 1.0)
     scene.add(ambientLight)
 
-    const hemiLight = new THREE.HemisphereLight(0x6688cc, 0x3a2a10, 0.8)
+    hemiLight = new THREE.HemisphereLight(0x4a5577, 0x2a1a08, 0.7)
     scene.add(hemiLight)
 
-    // Sun (low on horizon — golden hour warmth)
-    sunLight = new THREE.DirectionalLight(0xffb070, 1.5)
+    // Sun (low on horizon — sunrise warmth)
+    sunLight = new THREE.DirectionalLight(0xff7030, 1.2)
     sunLight.position.set(sunDir.x * 500, sunDir.y * 500, sunDir.z * 500)
     sunLight.castShadow = true
     sunLight.shadow.mapSize.width = 4096
@@ -162,8 +174,11 @@ export function useRenderer() {
     buildLaunchSite()
     buildRocket()
     buildSky()
+    buildHorizonHaze()
     buildStars()
     buildClouds()
+    buildSunBillboard()
+    buildLensflare()
 
     // ── Load 3D model ──
     loadFalcon9Model()
@@ -181,12 +196,13 @@ export function useRenderer() {
     composer = new EffectComposer(renderer, rt)
     renderPass = new RenderPass(scene, camera)
     composer.addPass(renderPass)
-    composer.addPass(new UnrealBloomPass(
+    bloomPass = new UnrealBloomPass(
       new THREE.Vector2(containerWidth, containerHeight),
       0.7,  // strength — subtle bloom, not washed out
       0.4,  // radius
       0.88, // threshold — only the very brightest HDR fire blooms
-    ))
+    )
+    composer.addPass(bloomPass)
     composer.addPass(new OutputPass())
 
     // ── Resize ──
@@ -620,6 +636,61 @@ export function useRenderer() {
     scene.add(skyMesh)
   }
 
+  // ── Horizon haze (radial gradient disc that blends terrain edge into sky) ──
+
+  function buildHorizonHaze() {
+    const hazeGeo = new THREE.PlaneGeometry(40000, 40000, 1, 1)
+    hazeGeo.rotateX(-Math.PI / 2)
+
+    const hazeMat = new THREE.ShaderMaterial({
+      uniforms: {
+        sunDirection: { value: sunDir.clone() },
+        opacity: { value: 1.0 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 sunDirection;
+        uniform float opacity;
+        varying vec2 vUv;
+        void main() {
+          vec2 centered = vUv - 0.5;
+          float dist = length(centered) * 2.0;
+
+          float innerFade = smoothstep(0.04, 0.15, dist);
+
+          vec3 hazeColor = mix(
+            vec3(0.25, 0.22, 0.25),
+            vec3(0.45, 0.30, 0.18),
+            smoothstep(0.15, 0.8, dist)
+          );
+
+          // Warm orange glow concentrated on sun-facing side
+          vec2 sunXZ = normalize(sunDirection.xz);
+          vec2 dirXZ = normalize(centered);
+          float sunFacing = max(0.0, dot(dirXZ, sunXZ));
+          float sunGlow = pow(sunFacing, 3.0) * smoothstep(0.05, 0.5, dist);
+          hazeColor += vec3(0.5, 0.22, 0.07) * sunGlow * 0.4;
+
+          float alpha = innerFade * 0.9 * opacity;
+          gl_FragColor = vec4(hazeColor, alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+
+    horizonHaze = new THREE.Mesh(hazeGeo, hazeMat)
+    horizonHaze.position.y = 2
+    scene.add(horizonHaze)
+  }
+
   // ── Stars ─────────────────────────────────────────────────────────
 
   function buildStars() {
@@ -869,6 +940,113 @@ export function useRenderer() {
     scene.add(cloudMesh)
   }
 
+  // ── Sun billboard (HDR radial gradient, picked up by bloom) ─────
+
+  function buildSunBillboard() {
+    const geo = new THREE.PlaneGeometry(1, 1)
+    sunBillboardMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        warmth: { value: 0.0 },
+        spaceIntensity: { value: 0.0 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float warmth;
+        uniform float spaceIntensity;
+        varying vec2 vUv;
+        void main() {
+          vec2 centered = vUv - 0.5;
+          float dist = length(centered) * 2.0;
+
+          // White-hot core
+          float core = exp(-dist * dist * 12.0);
+          // Warm glow ring
+          float glow = exp(-dist * dist * 2.5);
+
+          // Orange sunrise → near-white as sun rises
+          vec3 warmTint = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.97, 0.93), warmth);
+
+          // In space: brighter, sharper, more realistic
+          float coreBoost = 0.95 + spaceIntensity * 1.5;
+          float glowBoost = 0.15 + spaceIntensity * 0.4;
+
+          vec3 coreColor = vec3(coreBoost, coreBoost * 0.9, coreBoost * 0.8) * warmTint;
+          vec3 glowColor = vec3(glowBoost, glowBoost * 0.5, glowBoost * 0.2) * warmTint;
+
+          vec3 color = coreColor * core + glowColor * glow * 0.15;
+          float alpha = core * 0.9 + glow * 0.08;
+
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    })
+    sunBillboard = new THREE.Mesh(geo, sunBillboardMaterial)
+    sunBillboard.scale.setScalar(12)
+    sunBillboard.position.copy(sunDir).multiplyScalar(45000)
+    scene.add(sunBillboard)
+  }
+
+  // ── Lens flare (procedural textures, warm sunrise tones) ────────
+
+  function buildLensflare() {
+    function createGlowTexture(size: number, r: number, g: number, b: number): THREE.CanvasTexture {
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')!
+      const cx = size / 2
+      const gradient = ctx.createRadialGradient(cx, cx, 0, cx, cx, cx)
+      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`)
+      gradient.addColorStop(0.2, `rgba(${r}, ${g}, ${b}, 0.8)`)
+      gradient.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, 0.3)`)
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)')
+      ctx.fillStyle = gradient
+      ctx.fillRect(0, 0, size, size)
+      return new THREE.CanvasTexture(canvas)
+    }
+
+    function createRingTexture(size: number): THREE.CanvasTexture {
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')!
+      const cx = size / 2
+      const gradient = ctx.createRadialGradient(cx, cx, size * 0.25, cx, cx, size * 0.45)
+      gradient.addColorStop(0, 'rgba(255, 160, 80, 0)')
+      gradient.addColorStop(0.4, 'rgba(255, 140, 60, 0.15)')
+      gradient.addColorStop(0.5, 'rgba(255, 120, 40, 0.25)')
+      gradient.addColorStop(0.6, 'rgba(255, 140, 60, 0.15)')
+      gradient.addColorStop(1, 'rgba(255, 100, 30, 0)')
+      ctx.fillStyle = gradient
+      ctx.fillRect(0, 0, size, size)
+      return new THREE.CanvasTexture(canvas)
+    }
+
+    const mainGlow = createGlowTexture(256, 255, 200, 120)
+    const smallGlow = createGlowTexture(128, 255, 160, 80)
+    const ring = createRingTexture(256)
+
+    sunLensflare = new Lensflare()
+    sunLensflare.addElement(new LensflareElement(mainGlow, 50, 0, new THREE.Color(1.0, 0.7, 0.4)))
+    sunLensflare.addElement(new LensflareElement(ring, 35, 0, new THREE.Color(1.0, 0.5, 0.25)))
+    sunLensflare.addElement(new LensflareElement(smallGlow, 20, 0.2, new THREE.Color(1.0, 0.6, 0.25)))
+    sunLensflare.addElement(new LensflareElement(smallGlow, 12, 0.4, new THREE.Color(0.9, 0.5, 0.2)))
+    sunLensflare.addElement(new LensflareElement(smallGlow, 8, 0.7, new THREE.Color(0.8, 0.4, 0.15)))
+
+    sunLensflare.position.copy(sunDir).multiplyScalar(44000)
+    scene.add(sunLensflare)
+  }
+
   // ── Load Falcon 9 GLB model ─────────────────────────────────────
 
   function loadFalcon9Model() {
@@ -1063,6 +1241,14 @@ export function useRenderer() {
       passerelleRotation = 0
       if (passerellePivot) passerellePivot.rotation.y = 0
       particles.reset()
+      // Reset sun effects
+      if (sunBillboardMaterial) {
+        sunBillboardMaterial.uniforms.warmth.value = 0.0
+      }
+      if (bloomPass) {
+        bloomPass.strength = 0.7
+        bloomPass.threshold = 0.88
+      }
     }
 
     // Countdown zoom
@@ -1086,8 +1272,32 @@ export function useRenderer() {
 
     // ── Dynamic sunrise — sun slowly rises during mission ──
     const missionTime = flight.missionTime
-    const sunAngle = 0.15 + missionTime * 0.0004
-    sunDir.set(0.8, Math.min(0.45, sunAngle), 0.4).normalize()
+    const sunAngle = 0.03 + missionTime * 0.0003
+    sunDir.set(-0.4, Math.min(0.35, sunAngle), -0.8).normalize()
+
+    // ── Dynamic sunrise lighting ──
+    const sunProgress = Math.min(1, Math.max(0, (sunAngle - 0.03) / 0.32))
+
+    // sunLight: deep orange → warm white
+    _sunColor.setRGB(1.0, 0.35 + sunProgress * 0.55, 0.15 + sunProgress * 0.65)
+    sunLight.color.copy(_sunColor)
+    sunLight.intensity = 1.0 + sunProgress * 1.0
+
+    // Ambient: pre-dawn → normal
+    ambientLight.intensity = 1.0 + sunProgress * 0.4
+
+    // Hemisphere: darker sky/ground → normal values
+    hemiLight.color.setRGB(
+      0.29 + sunProgress * 0.11,
+      0.33 + sunProgress * 0.20,
+      0.47 + sunProgress * 0.33,
+    )
+    hemiLight.groundColor.setRGB(
+      0.17 + sunProgress * 0.06,
+      0.10 + sunProgress * 0.06,
+      0.03 + sunProgress * 0.03,
+    )
+    hemiLight.intensity = 0.7 + sunProgress * 0.1
 
     // Update sun light position (follows rocket for proper shadows)
     if (flight.altitude < 5000) {
@@ -1206,6 +1416,39 @@ export function useRenderer() {
     // Camera
     updateCamera(flight, visualAlt, splitMode)
 
+    // ── Sun billboard + lensflare tracking ──
+    // No atmosphere in space → sun is brighter and sharper
+    const spaceFactor = Math.min(1, Math.max(0, (flight.altitude - 30000) / 70000))
+
+    if (sunBillboard) {
+      sunBillboard.position.copy(camera.position).addScaledVector(sunDir, 45000)
+      sunBillboard.lookAt(camera.position)
+      sunBillboardMaterial.uniforms.warmth.value = sunProgress
+      sunBillboardMaterial.uniforms.spaceIntensity.value = spaceFactor
+    }
+    if (sunLensflare) {
+      sunLensflare.position.copy(camera.position).addScaledVector(sunDir, 44000)
+    }
+
+    // Boost sun light intensity in space (no atmospheric attenuation)
+    sunLight.intensity = (1.0 + sunProgress * 1.0) * (1.0 + spaceFactor * 0.8)
+
+    // ── Dynamic bloom when facing sun ──
+    if (bloomPass && !splitMode) {
+      _camForward.set(0, 0, -1).applyQuaternion(camera.quaternion)
+      const sunDot = _camForward.dot(sunDir)
+      // More bloom in space when facing sun
+      const spaceBloomBoost = spaceFactor * 0.15
+      if (sunDot > 0.3) {
+        const t = (sunDot - 0.3) / 0.7
+        bloomPass.strength = 0.7 + t * (0.15 + spaceBloomBoost)
+        bloomPass.threshold = 0.88 - t * (0.04 + spaceFactor * 0.06)
+      } else {
+        bloomPass.strength = 0.7
+        bloomPass.threshold = 0.88
+      }
+    }
+
     // Sky + atmosphere transition
     updateSky(flight.altitude)
 
@@ -1221,6 +1464,15 @@ export function useRenderer() {
 
     // Launch site visibility
     const siteVisible = flight.altitude < 50000
+
+    // Horizon haze fades out early so its square edges don't show against the curved Earth
+    if (horizonHaze) {
+      const hazeFade = flight.altitude < 2000
+        ? 1.0
+        : flight.altitude < 15000 ? 1.0 - (flight.altitude - 2000) / 13000 : 0
+      ;(horizonHaze.material as THREE.ShaderMaterial).uniforms.opacity.value = hazeFade
+      horizonHaze.visible = hazeFade > 0.01
+    }
     if (launchSiteGroup && !modelLoaded) {
       launchSiteGroup.visible = siteVisible
     }
@@ -1448,6 +1700,13 @@ export function useRenderer() {
       onResizeHandler = null
     }
     particles.dispose()
+    if (sunBillboard) {
+      sunBillboard.geometry.dispose()
+      sunBillboardMaterial.dispose()
+    }
+    if (sunLensflare) {
+      scene.remove(sunLensflare)
+    }
     if (renderer) {
       renderer.dispose()
       renderer.domElement.remove()

@@ -41,6 +41,9 @@ export function useAudio() {
   let musicPlaying = false
   let currentTrack = ''
 
+  // Ambient pre-launch loop (HTML Audio — simple and reliable)
+  let ambientEl: HTMLAudioElement | null = null
+
   // One-shot SFX
   const sfxBuffers: Record<string, AudioBuffer | null> = {}
   let sfxGain: GainNode | null = null
@@ -203,6 +206,21 @@ export function useAudio() {
     }
   }
 
+  /** Start the ambient pre-launch loop. Safe to call on page load (autoplay may be blocked). */
+  function startAmbient() {
+    if (ambientEl) {
+      // Already created but paused (autoplay was blocked) — try resuming
+      if (ambientEl.paused) {
+        ambientEl.play().catch(() => {})
+      }
+      return
+    }
+    ambientEl = new Audio('/sounds/outside-wait.mp3')
+    ambientEl.loop = true
+    ambientEl.volume = 0.2
+    ambientEl.play().catch(() => {})
+  }
+
   function update(flight: FlightData, phase: string, countdown: number) {
     if (!initialized || !ctx) return
 
@@ -235,6 +253,17 @@ export function useAudio() {
 
     lastMissionTime = missionTime
     lastPhase = phase
+
+    // ── Ambient pre-launch loop: fade out once flying ──
+    if (ambientEl) {
+      if (phase !== 'pre-launch' || muted) {
+        ambientEl.volume = Math.max(0, ambientEl.volume - 0.005)
+        if (ambientEl.volume <= 0) {
+          ambientEl.pause()
+          ambientEl = null
+        }
+      }
+    }
 
     // ── Engine loop volumes ──
     const isFlying = phase !== 'pre-launch' && phase !== 'orbit' && phase !== 'failed'
@@ -438,6 +467,11 @@ export function useAudio() {
     mecoMissionTime = -1
     reachedSpacePlayed = false
     stopMusic()
+
+    // Restart ambient loop for pre-launch
+    if (!ambientEl) {
+      startAmbient()
+    }
   }
 
   function toggleMute(): boolean {
@@ -450,10 +484,12 @@ export function useAudio() {
       if (voiceGain) voiceGain.gain.value = 0
       if (musicGain) musicGain.gain.value = 0
       if (sfxGain) sfxGain.gain.value = 0
+      if (ambientEl) ambientEl.volume = 0
     } else {
       if (voiceGain) voiceGain.gain.value = 1
       if (musicGain && musicPlaying) musicGain.gain.value = 0.35
       if (sfxGain) sfxGain.gain.value = 0.08
+      if (ambientEl) ambientEl.volume = 0.2
     }
     return muted
   }
@@ -464,6 +500,10 @@ export function useAudio() {
 
   function dispose() {
     stopMusic()
+    if (ambientEl) {
+      ambientEl.pause()
+      ambientEl = null
+    }
     for (const layer of Object.values(layers)) {
       layer.source?.stop()
       layer.source?.disconnect()
@@ -481,6 +521,7 @@ export function useAudio() {
   return {
     init,
     resume,
+    startAmbient,
     update,
     playLaunchSequence,
     playIgnition,

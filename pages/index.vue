@@ -281,6 +281,7 @@ function handleAction() {
   if (!audioStarted.value) {
     audio.init()
     audio.resume()
+    audio.startAmbient()
     audioStarted.value = true
     audio.playLaunchSequence()
     audio.playWalkwayRotate()
@@ -356,6 +357,9 @@ onMounted(() => {
 
   renderer.init(containerRef.value)
   isInitialized.value = true
+
+  // Try to play ambient sound immediately — browser may block it, that's OK
+  audio.startAmbient()
 
   window.addEventListener('keydown', onKeyDown)
   requestAnimationFrame(gameLoop)
