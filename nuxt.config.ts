@@ -17,6 +17,13 @@ export default defineNuxtConfig({
         { charset: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' },
         { name: 'description', content: 'Launch a rocket to orbit. Time your staging perfectly.' },
+        { property: 'og:title', content: 'LAUNCH — SpaceX Launch Simulator' },
+        { property: 'og:description', content: 'Launch a rocket to orbit. Time your staging perfectly.' },
+        { property: 'og:image', content: 'https://space.indiega.me/space.jpg' },
+        { property: 'og:type', content: 'website' },
+        { property: 'og:url', content: 'https://space.indiega.me' },
+        { name: 'twitter:card', content: 'summary_large_image' },
+        { name: 'twitter:image', content: 'https://space.indiega.me/space.jpg' },
       ],
       link: [
         { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
