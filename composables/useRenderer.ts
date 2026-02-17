@@ -97,6 +97,15 @@ export function useRenderer() {
   let shakeTime = 0
   let separationOffset = 0
 
+  // Gravity turn — visual pitch and downrange displacement
+  const DOWNRANGE_DIR = new THREE.Vector3(-0.6, 0, -0.8).normalize()
+  const PITCH_AXIS = new THREE.Vector3(
+    DOWNRANGE_DIR.z, 0, -DOWNRANGE_DIR.x,
+  ).normalize() // perpendicular to downrange in horizontal plane
+  let stage1SepPitch = 0
+  let stage1SepOffsetX = 0
+  let stage1SepOffsetZ = 0
+
   // ── Init ──────────────────────────────────────────────────────────
 
   function init(container: HTMLElement) {
@@ -1256,6 +1265,30 @@ export function useRenderer() {
     dracoLoader.dispose()
   }
 
+  // ── Gravity turn pitch profile (Falcon 9 style) ──────────────────
+
+  function getGravityTurnPitch(missionTime: number): number {
+    const DEG = Math.PI / 180
+    if (missionTime < 5) return 0                          // vertical off pad
+    if (missionTime < 15) {
+      // pitch kick: 0° → 3°
+      return ((missionTime - 5) / 10) * 3 * DEG
+    }
+    if (missionTime < 70) {
+      // gravity turn through max-Q: 3° → 25°
+      const t = (missionTime - 15) / 55
+      return (3 + t * 22) * DEG
+    }
+    if (missionTime < 149) {
+      // continue to MECO: 25° → 55°
+      const t = (missionTime - 70) / 79
+      return (25 + t * 30) * DEG
+    }
+    // Stage 2: 55° → 70°
+    const t = Math.min(1, (missionTime - 149) / 200)
+    return (55 + t * 15) * DEG
+  }
+
   // ── Scene update (per frame) ──────────────────────────────────────
 
   function updateScene(state: GameState, started: boolean, dt: number, audioStarted: boolean = false) {
@@ -1279,6 +1312,10 @@ export function useRenderer() {
       flameMesh.position.y = -19.5
       s2FlameMesh.visible = false
       separationOffset = 0
+      stage1SepPitch = 0
+      stage1SepOffsetX = 0
+      stage1SepOffsetZ = 0
+      rocketGroup.quaternion.identity()
       towerRotation = 0
       if (towerPivot) towerPivot.rotation.z = 0
       passerelleRotation = 0
@@ -1312,6 +1349,20 @@ export function useRenderer() {
 
     const visualAlt = altitudeToVisual(flight.altitude)
     rocketGroup.position.y = 0.5 + visualAlt
+
+    // ── Gravity turn: visual pitch and downrange displacement ──
+    const isFlying = phase !== 'pre-launch' && phase !== 'orbit' && phase !== 'failed'
+    if (isFlying) {
+      const pitch = getGravityTurnPitch(flight.missionTime)
+      const horizontalOffset = visualAlt * Math.sin(pitch) * 0.25
+      rocketGroup.position.x = DOWNRANGE_DIR.x * horizontalOffset
+      rocketGroup.position.z = DOWNRANGE_DIR.z * horizontalOffset
+      rocketGroup.quaternion.setFromAxisAngle(PITCH_AXIS, pitch)
+    } else if (phase === 'pre-launch') {
+      rocketGroup.position.x = 0
+      rocketGroup.position.z = 0
+      rocketGroup.quaternion.identity()
+    }
 
     // ── Dynamic sunrise — sun slowly rises during mission ──
     const missionTime = flight.missionTime
@@ -1424,7 +1475,7 @@ export function useRenderer() {
     // ── Fire light ──
     if (flameOn) {
       const fireLightY = flight.stage === 1 ? -1.5 : (modelLoaded ? s2NozzleLocalY : 41.5)
-      fireLight.position.set(0, rocketGroup.position.y + fireLightY, 0)
+      fireLight.position.set(rocketGroup.position.x, rocketGroup.position.y + fireLightY, rocketGroup.position.z)
       const flicker = 0.8 + Math.random() * 0.4
       fireLight.color.setHex(flight.stage === 1 ? 0xffaa33 : 0x6688ff)
       fireLight.intensity = flight.throttle * (flight.stage === 1 ? 12 : 6) * flicker
@@ -1463,14 +1514,19 @@ export function useRenderer() {
 
       const stage1VisualAlt = altitudeToVisual(stage1Flight.altitude)
       separatedStage1.position.y = 0.5 + stage1VisualAlt - separationOffset
-      updateStage1Camera(stage1Flight)
+      separatedStage1.position.x = stage1SepOffsetX
+      separatedStage1.position.z = stage1SepOffsetZ
+      separatedStage1.quaternion.setFromAxisAngle(PITCH_AXIS, stage1SepPitch)
+      updateStage1Camera(stage1Flight, flight.missionTime, stage1SepOffsetX, stage1SepOffsetZ)
     } else if (phase === 'stage2-flight' || phase === 'seco' || phase === 'orbit') {
       if (modelLoaded && loadedRocketS1) loadedRocketS1.visible = false
       else stage1Group.visible = false
     }
 
     // Camera
-    updateCamera(flight, visualAlt, splitMode)
+    const rocketX = rocketGroup.position.x
+    const rocketZ = rocketGroup.position.z
+    updateCamera(flight, visualAlt, splitMode, rocketX, rocketZ)
 
     // ── Sun billboard + lensflare tracking ──
     // No atmosphere → sun gets brighter/sharper; ramp starts at ~10 km (max Q dazzle)
@@ -1543,7 +1599,7 @@ export function useRenderer() {
     if (towerPivot) {
       towerPivot.visible = siteVisible
       // Rotate tower away after liftoff (rotates ~15° over a few seconds)
-      if (phase === 'ascending' && towerRotation < Math.PI / 12) {
+      if (phase === 'flying' && towerRotation < Math.PI / 12) {
         towerRotation += dt * 0.15
         towerPivot.rotation.z = Math.min(towerRotation, Math.PI / 12)
       }
@@ -1569,7 +1625,7 @@ export function useRenderer() {
     }
   }
 
-  function updateCamera(flight: FlightData, visualAlt: number, isSplit: boolean = false) {
+  function updateCamera(flight: FlightData, visualAlt: number, isSplit: boolean = false, rocketX: number = 0, rocketZ: number = 0) {
     const alt = Math.max(1, flight.altitude)
     let camDist: number
     let camHeight: number
@@ -1596,8 +1652,9 @@ export function useRenderer() {
     camDist += zoom * 160
     camHeight += zoom * 40
 
-    const targetX = camDist * 0.6
-    const targetZ = camDist * 0.8
+    // Camera offset relative to rocket position (tracks downrange displacement)
+    const targetX = rocketX + camDist * 0.6
+    const targetZ = rocketZ + camDist * 0.8
 
     // In split mode, center on S2 body (~50 units above rocket base)
     const lookOffset = isSplit ? 50 : 30
@@ -1610,7 +1667,7 @@ export function useRenderer() {
     camera.position.y += (targetY - camera.position.y) * lerpSpeed
     camera.position.z += (targetZ - camera.position.z) * lerpSpeed
 
-    const lookTarget = new THREE.Vector3(0, lookY, 0)
+    const lookTarget = new THREE.Vector3(rocketX, lookY, rocketZ)
     camera.lookAt(lookTarget)
 
     // Subtle camera shake during low-altitude powered flight
@@ -1624,23 +1681,30 @@ export function useRenderer() {
     }
   }
 
-  function updateStage1Camera(stage1Flight: FlightData) {
+  function updateStage1Camera(stage1Flight: FlightData, missionTime: number, s1X: number = 0, s1Z: number = 0) {
     const stage1VisualAlt = altitudeToVisual(stage1Flight.altitude)
     const stage1Y = 0.5 + stage1VisualAlt
 
     // S1 center is ~18 units above its base (half of first stage height)
     const lookY = stage1Y + 18
 
-    const camDist = 70
-    const targetX = camDist * 0.5
-    const targetY = lookY + 10
-    const targetZ = camDist * 0.7
+    // After SES (~T+156), zoom out so stage 1 is fully visible with a slightly above angle
+    const sesTime = 156
+    const zoomOutProgress = Math.min(1, Math.max(0, (missionTime - sesTime) / 8))
+    const t = zoomOutProgress * zoomOutProgress * (3 - 2 * zoomOutProgress) // smoothstep
+
+    const camDist = 70 + t * 70       // 70 → 140
+    const camHeightOffset = 10 + t * 35 // 10 → 45 (more above angle)
+
+    const targetX = s1X + camDist * 0.5
+    const targetY = lookY + camHeightOffset
+    const targetZ = s1Z + camDist * 0.7
 
     stage1Camera.position.x += (targetX - stage1Camera.position.x) * 0.04
     stage1Camera.position.y += (targetY - stage1Camera.position.y) * 0.04
     stage1Camera.position.z += (targetZ - stage1Camera.position.z) * 0.04
 
-    stage1Camera.lookAt(new THREE.Vector3(0, lookY, 0))
+    stage1Camera.lookAt(new THREE.Vector3(s1X, lookY, s1Z))
   }
 
   function updateSky(altitude: number) {
@@ -1656,6 +1720,11 @@ export function useRenderer() {
   function triggerStageSeparation(_flight: FlightData) {
     // Start with small gap, animate it in updateScene
     separationOffset = 2
+
+    // Freeze gravity turn state for separated stage 1
+    stage1SepPitch = getGravityTurnPitch(_flight.missionTime)
+    stage1SepOffsetX = rocketGroup.position.x
+    stage1SepOffsetZ = rocketGroup.position.z
 
     if (modelLoaded && loadedRocketS1) {
       // Clone loaded S1 as separated piece

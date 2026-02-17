@@ -25,7 +25,6 @@ const TIME_CUES: [number, string][] = [
 
 const EVENT_CUES: [string, string][] = [
   ['max-q', 'maxq'],
-  ['meco', 'meco'],
 ]
 
 export function useAudio() {
@@ -211,14 +210,19 @@ export function useAudio() {
     if (ambientEl) {
       // Already created but paused (autoplay was blocked) — try resuming
       if (ambientEl.paused) {
-        ambientEl.play().catch(() => {})
+        ambientEl.play().catch(() => {
+          // Still blocked — recreate on next user interaction
+          ambientEl = null
+        })
       }
       return
     }
     ambientEl = new Audio('/sounds/outside-wait.mp3')
     ambientEl.loop = true
     ambientEl.volume = 0.2
-    ambientEl.play().catch(() => {})
+    ambientEl.play().catch(() => {
+      // Autoplay blocked — will retry on next startAmbient() call after user interaction
+    })
   }
 
   function update(flight: FlightData, phase: string, countdown: number) {
@@ -240,8 +244,9 @@ export function useAudio() {
       }
     }
 
-    // ── Track MECO time for "reached space" music trigger ──
+    // ── MECO: play voice cue and track time for "reached space" music trigger ──
     if (lastPhase !== 'stage-sep' && phase === 'stage-sep') {
+      playVoice('meco')
       mecoMissionTime = missionTime
     }
 
@@ -278,6 +283,14 @@ export function useAudio() {
       const isStage2 = phase === 'stage2-flight' || phase === 'seco'
       const stageMul = isStage2 ? 0.2 : 1.0
 
+      // Burn fade: gradually reduce engine volume between liftoff and max-q
+      // to let the music breathe, while keeping engines audible for MECO cut
+      const burnFadeStart = 5    // seconds after liftoff — stay loud for initial burst
+      const burnFadeEnd = 70     // ~max-q time
+      const burnFadeFloor = 0.35 // don't go below this — MECO cut must be audible
+      const burnFadeProgress = Math.min(1, Math.max(0, (flight.missionTime - burnFadeStart) / (burnFadeEnd - burnFadeStart)))
+      const burnFade = isStage2 ? 1.0 : 1.0 - burnFadeProgress * (1.0 - burnFadeFloor)
+
       // Altitude crossfade: loud engine → space engine
       const altFactor = Math.min(1, flight.altitude / 80000)
 
@@ -286,17 +299,17 @@ export function useAudio() {
       const launchBoost = launchProximity * launchProximity * 0.5
 
       // Primary engine: loud at launch, crossfades out with altitude
-      layers.loudEngine.targetVolume = (1 - altFactor) * (0.65 + launchBoost) * stageMul
+      layers.loudEngine.targetVolume = (1 - altFactor) * (0.65 + launchBoost) * stageMul * burnFade
       // Space engine: crossfades in with altitude
-      layers.spaceEngine.targetVolume = altFactor * 0.45 * stageMul
+      layers.spaceEngine.targetVolume = altFactor * 0.45 * stageMul * burnFade
 
       // Ambient texture layers (lower volume, complement the main engines)
-      layers.atmosphere.targetVolume = (1 - altFactor) * (0.15 + launchBoost * 0.3) * stageMul
-      layers.highAltitude.targetVolume = altFactor * 0.12 * stageMul
+      layers.atmosphere.targetVolume = (1 - altFactor) * (0.15 + launchBoost * 0.3) * stageMul * burnFade
+      layers.highAltitude.targetVolume = altFactor * 0.12 * stageMul * burnFade
 
       const maxQBoost = phase === 'max-q' ? 0.08 : 0
-      layers.noise.targetVolume = (0.08 + maxQBoost + launchBoost * 0.3) * stageMul
-      layers.highNoise.targetVolume = (Math.min(1, flight.dynamicPressure / 30000) * 0.12 + launchBoost * 0.2) * stageMul
+      layers.noise.targetVolume = (0.08 + maxQBoost + launchBoost * 0.3) * stageMul * burnFade
+      layers.highNoise.targetVolume = (Math.min(1, flight.dynamicPressure / 30000) * 0.12 + launchBoost * 0.2) * stageMul * burnFade
     }
 
     // Smooth volume transitions
