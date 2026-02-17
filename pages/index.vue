@@ -560,7 +560,7 @@ onUnmounted(() => {
           </div>
           <div class="credits-section">
             <div class="credits-label">BUILT WITH</div>
-            <div class="credits-value">100% vibecoded using <a href="https://claude.ai/claude-code" target="_blank" rel="noopener">Claude Code</a></div>
+            <div class="credits-value">100% vibecoded using <a href="https://claude.com/product/claude-code" target="_blank" rel="noopener">Claude Code</a></div>
           </div>
           <div class="credits-section">
             <div class="credits-label">3D MODEL</div>
@@ -572,11 +572,11 @@ onUnmounted(() => {
           </div>
           <div class="credits-section">
             <div class="credits-label">MUSIC & SOUND EFFECTS</div>
-            <div class="credits-value">Generated using ElevenLabs</div>
+            <div class="credits-value">Generated using <a href="https://elevenlabs.io/" target="_blank" rel="noopener">ElevenLabs</a></div>
           </div>
           <div class="credits-section">
             <div class="credits-label">DISCLAIMER</div>
-            <div class="credits-value">This is a fan project. SpaceX, Falcon 9, and all related names and imagery are trademarks of Space Exploration Technologies Corp.</div>
+            <div class="credits-value">This is a fan project. <a href="https://www.spacex.com" target="_blank" rel="noopener">SpaceX</a>, Falcon 9, and all related names and imagery are trademarks of Space Exploration Technologies Corp.</div>
           </div>
           <div class="credits-close" @click="toggleCredits">CLOSE</div>
         </div>
