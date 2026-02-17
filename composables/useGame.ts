@@ -37,7 +37,7 @@ const MISSION_EVENTS: GameEvent[] = [
   {
     id: 'ses-1',
     label: 'SES-1',
-    triggerTime: 161,
+    triggerTime: 156,
     windowSize: 0,
     phase: 'stage2-flight',
     nextPhase: 'stage2-flight',

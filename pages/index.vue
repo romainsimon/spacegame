@@ -35,7 +35,7 @@ const milestones = [
   { id: 'max-q', label: 'MAX Q', time: 70 },
   { id: 'meco', label: 'MECO', time: 149 },
   { id: 'stage-sep', label: 'STAGE SEP', time: 153 },
-  { id: 'ses-1', label: 'SES-1', time: 161 },
+  { id: 'ses-1', label: 'SES-1', time: 156 },
   { id: 'seco', label: 'SECO', time: 480 },
 ]
 

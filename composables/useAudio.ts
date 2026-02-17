@@ -19,7 +19,7 @@ const TIME_CUES: [number, string][] = [
   [-15, '15_seconds'],
   [-10, 'countdown'],
   [20, 'trajectoryNominal'],
-  [161, 'ses1'],
+  [156, 'ses1'],
   [170, 'goodData'],
 ]
 
@@ -415,14 +415,17 @@ export function useAudio() {
     src.start(0)
   }
 
-  /** Play stage separation SFX (one-shot, low volume) */
+  /** Play stage separation SFX (one-shot, dedicated gain so it's audible over voice cue) */
   function playStageSeparationSfx() {
-    if (!ctx || !sfxGain || muted) return
+    if (!ctx || muted) return
     const buffer = sfxBuffers.stageSeparation
     if (!buffer) return
+    const gain = ctx.createGain()
+    gain.gain.value = 0.35
+    gain.connect(ctx.destination)
     const src = ctx.createBufferSource()
     src.buffer = buffer
-    src.connect(sfxGain)
+    src.connect(gain)
     src.start(0)
   }
 

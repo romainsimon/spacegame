@@ -916,11 +916,9 @@ export function useRenderer() {
     let rocketMinY = Infinity
     let rocketMaxY = -Infinity
 
-    const allMeshNames: string[] = []
     gltf.scene.traverse((child) => {
       if (!(child as THREE.Mesh).isMesh) return
       const mesh = child as THREE.Mesh
-      allMeshNames.push(mesh.name)
 
       const box = new THREE.Box3().setFromObject(mesh)
       const center = new THREE.Vector3()
@@ -940,8 +938,6 @@ export function useRenderer() {
         if (box.max.y > rocketMaxY) rocketMaxY = box.max.y
       }
     })
-    console.log('[Model] All mesh names:', allMeshNames)
-
     // Auto-compute interstage split: Falcon 9 S1 + interstage is ~63% of total height
     const rocketHeight = rocketMaxY - rocketMinY
     const interstageY = rocketMinY + rocketHeight * 0.63
@@ -972,7 +968,6 @@ export function useRenderer() {
       } else if (info.mesh.name === 'Support_Tower') {
         towerGroup.add(clone)
       } else if (info.mesh.name.toLowerCase().startsWith('passerelle')) {
-        console.log('[Model] Found passerelle part:', info.mesh.name, 'center:', info.center.toArray())
         passerelleGroup.add(clone)
       } else {
         padGroup.add(clone)
@@ -1006,7 +1001,6 @@ export function useRenderer() {
       // Pivot at tower-side end: farthest X from rocket axis, center Z
       const pivotX = Math.abs(passBox.min.x) > Math.abs(passBox.max.x) ? passBox.min.x : passBox.max.x
       const pivotZ = (passBox.min.z + passBox.max.z) / 2
-      console.log('[Model] Passerelle pivot at:', pivotX, pivotZ)
 
       passerellePivot = new THREE.Group()
       passerellePivot.position.set(pivotX, passerelleGroup.position.y, pivotZ)
@@ -1135,9 +1129,15 @@ export function useRenderer() {
         )
         ;(flameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
       } else {
-        // MVac: wide vacuum-expanded blue plume
-        flameMesh.visible = false
+        // MVac: wide vacuum-expanded blue plume + original cone
+        flameMesh.visible = true
         s2FlameMesh.visible = true
+        // Cone (atmospheric style, scaled down for S2)
+        flameMesh.scale.set(
+          throttleScale * flicker * 0.4,
+          throttleScale * flicker * 0.5,
+          throttleScale * flicker * 0.4,
+        )
         const plumeScale = throttleScale * flicker
         s2FlameMesh.scale.set(
           plumeScale * 12,
@@ -1147,6 +1147,7 @@ export function useRenderer() {
         const s2FlameY = modelLoaded ? s2NozzleLocalY : 42
         flameGroup.position.y = s2FlameY
         flameGroup.position.x = -1.5
+        flameMesh.position.y = -12
         ;(s2FlameMesh.material as THREE.ShaderMaterial).uniforms.time.value += dt
       }
     } else {
@@ -1187,6 +1188,13 @@ export function useRenderer() {
     if (splitMode && stage1Flight && separatedStage1) {
       if (modelLoaded && loadedRocketS1) loadedRocketS1.visible = false
       else stage1Group.visible = false
+
+      // Animate separation gap (grows smoothly over time)
+      const maxSeparation = 30
+      if (separationOffset < maxSeparation) {
+        separationOffset += dt * 4
+      }
+
       const stage1VisualAlt = altitudeToVisual(stage1Flight.altitude)
       separatedStage1.position.y = 0.5 + stage1VisualAlt - separationOffset
       updateStage1Camera(stage1Flight)
@@ -1234,12 +1242,7 @@ export function useRenderer() {
       if (audioStarted && passerelleRotation < maxAngle) {
         passerelleRotation += dt * 0.12
         passerellePivot.rotation.y = -Math.min(passerelleRotation, maxAngle)
-        if (passerelleRotation < 0.05) {
-          console.log('[Passerelle] Rotating:', passerelleRotation.toFixed(3), 'dt:', dt.toFixed(4), 'audioStarted:', audioStarted)
-        }
       }
-    } else if (audioStarted) {
-      console.warn('[Passerelle] pivot is null — passerelle not found in model?')
     }
 
     // Stars
@@ -1338,8 +1341,8 @@ export function useRenderer() {
   }
 
   function triggerStageSeparation(_flight: FlightData) {
-    // Instant visual separation gap
-    separationOffset = 15
+    // Start with small gap, animate it in updateScene
+    separationOffset = 2
 
     if (modelLoaded && loadedRocketS1) {
       // Clone loaded S1 as separated piece
