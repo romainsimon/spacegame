@@ -23,6 +23,8 @@ export default defineNuxtConfig({
         { property: 'og:type', content: 'website' },
         { property: 'og:url', content: 'https://space.indiega.me' },
         { name: 'twitter:card', content: 'summary_large_image' },
+        { name: 'twitter:site', content: '@romainsimon' },
+        { name: 'twitter:creator', content: '@romainsimon' },
         { name: 'twitter:image', content: 'https://space.indiega.me/space.jpg' },
       ],
       link: [
