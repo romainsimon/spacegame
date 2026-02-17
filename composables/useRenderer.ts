@@ -948,6 +948,7 @@ export function useRenderer() {
       uniforms: {
         warmth: { value: 0.0 },
         spaceIntensity: { value: 0.0 },
+        time: { value: 0.0 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -959,28 +960,70 @@ export function useRenderer() {
       fragmentShader: /* glsl */ `
         uniform float warmth;
         uniform float spaceIntensity;
+        uniform float time;
         varying vec2 vUv;
+
+        float hash(float n) { return fract(sin(n) * 43758.5453); }
+
         void main() {
           vec2 centered = vUv - 0.5;
           float dist = length(centered) * 2.0;
 
-          // White-hot core
-          float core = exp(-dist * dist * 12.0);
-          // Warm glow ring
-          float glow = exp(-dist * dist * 2.5);
+          // Circular mask
+          float edgeMask = smoothstep(1.0, 0.45, dist);
+          if (edgeMask < 0.001) discard;
 
-          // Orange sunrise → near-white as sun rises
+          float angle = atan(centered.y, centered.x);
+
+          // ── Tiny hard core ──
+          float core = exp(-dist * dist * 50.0);
+
+          // ── 4 structured cross spikes (always visible) ──
+          float rot = time * 0.05;
+          float cross4 = pow(abs(cos((angle + rot) * 2.0)), 16.0);
+          float crossFade = exp(-dist * 1.3) * (1.0 - exp(-dist * 14.0));
+          float crossRays = cross4 * crossFade * (0.3 + spaceIntensity * 0.3);
+
+          // ── Many individual random flares (space: 24 rays) ──
+          float flares = 0.0;
+          const float PI = 3.14159265;
+          for (int i = 0; i < 24; i++) {
+            float fi = float(i);
+            // Each ray: random fixed angle, length, width, brightness
+            float rayAngle = hash(fi * 127.1 + 7.3) * PI * 2.0;
+            float rayLen = hash(fi * 311.7 + 13.1) * 0.55 + 0.15;
+            float rayWidth = 0.02 + hash(fi * 73.1 + 3.7) * 0.03;
+            float rayBright = hash(fi * 43.7 + 17.1) * 0.7 + 0.3;
+
+            // Twinkle: each ray pulses independently
+            float speed = 1.5 + hash(fi * 97.3 + 5.3) * 4.0;
+            float twinkle = 0.4 + 0.6 * sin(time * speed + fi * 3.71);
+
+            // Angular proximity to this ray
+            float ad = angle - rayAngle;
+            ad = mod(ad + PI, PI * 2.0) - PI; // wrap to [-PI, PI]
+            float inRay = exp(-ad * ad / (rayWidth * rayWidth));
+
+            // Radial falloff per ray
+            float radFade = exp(-dist / rayLen * 2.5) * smoothstep(0.0, 0.04, dist);
+
+            flares += inRay * radFade * rayBright * twinkle;
+          }
+          flares *= spaceIntensity;
+
+          // ── Combine ──
+          float totalRays = crossRays + flares * 0.5;
+
+          // Orange sunrise → near-white
           vec3 warmTint = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.97, 0.93), warmth);
 
-          // In space: brighter, sharper, more realistic
-          float coreBoost = 0.95 + spaceIntensity * 1.5;
-          float glowBoost = 0.15 + spaceIntensity * 0.4;
+          float coreHDR = 1.1 + spaceIntensity * 1.0;
+          vec3 coreColor = vec3(coreHDR, coreHDR * 0.92, coreHDR * 0.85) * warmTint;
+          vec3 rayColor = vec3(0.6, 0.42, 0.18) * warmTint * (1.0 + spaceIntensity * 1.2);
 
-          vec3 coreColor = vec3(coreBoost, coreBoost * 0.9, coreBoost * 0.8) * warmTint;
-          vec3 glowColor = vec3(glowBoost, glowBoost * 0.5, glowBoost * 0.2) * warmTint;
-
-          vec3 color = coreColor * core + glowColor * glow * 0.15;
-          float alpha = core * 0.9 + glow * 0.08;
+          vec3 color = (coreColor * core + rayColor * totalRays) * edgeMask;
+          float alpha = (core + totalRays * 0.9) * edgeMask;
+          alpha = min(alpha, 1.0);
 
           gl_FragColor = vec4(color, alpha);
         }
@@ -991,7 +1034,7 @@ export function useRenderer() {
       side: THREE.DoubleSide,
     })
     sunBillboard = new THREE.Mesh(geo, sunBillboardMaterial)
-    sunBillboard.scale.setScalar(12)
+    sunBillboard.scale.setScalar(3000)
     sunBillboard.position.copy(sunDir).multiplyScalar(45000)
     scene.add(sunBillboard)
   }
@@ -1283,10 +1326,13 @@ export function useRenderer() {
     sunLight.color.copy(_sunColor)
     sunLight.intensity = 1.0 + sunProgress * 1.0
 
-    // Ambient: pre-dawn → normal
-    ambientLight.intensity = 1.0 + sunProgress * 0.4
+    // In space: no atmosphere to scatter fill light → deep shadows
+    const altFadeFactor = Math.min(1, Math.max(0, (flight.altitude - 10000) / 80000))
 
-    // Hemisphere: darker sky/ground → normal values
+    // Ambient: pre-dawn → normal on ground, reduced in space (but not black)
+    ambientLight.intensity = (1.0 + sunProgress * 0.4) * (1.0 - altFadeFactor * 0.55)
+
+    // Hemisphere: darker sky/ground → normal, reduced in space
     hemiLight.color.setRGB(
       0.29 + sunProgress * 0.11,
       0.33 + sunProgress * 0.20,
@@ -1297,25 +1343,35 @@ export function useRenderer() {
       0.10 + sunProgress * 0.06,
       0.03 + sunProgress * 0.03,
     )
-    hemiLight.intensity = 0.7 + sunProgress * 0.1
+    hemiLight.intensity = (0.7 + sunProgress * 0.1) * (1.0 - altFadeFactor * 0.65)
 
-    // Update sun light position (follows rocket for proper shadows)
+    // Sun light position follows rocket for shadows at all altitudes
+    sunLight.position.set(
+      rocketGroup.position.x + sunDir.x * 500,
+      rocketGroup.position.y + sunDir.y * 500,
+      rocketGroup.position.z + sunDir.z * 500,
+    )
+    sunLight.target.position.set(rocketGroup.position.x, rocketGroup.position.y, rocketGroup.position.z)
+    sunLight.target.updateMatrixWorld()
+
+    // Shadow camera — tight around rocket at altitude, wider on the ground
     if (flight.altitude < 5000) {
-      sunLight.position.set(
-        sunDir.x * 500,
-        rocketGroup.position.y + sunDir.y * 500,
-        sunDir.z * 500,
-      )
-      sunLight.target.position.set(0, rocketGroup.position.y, 0)
-      sunLight.target.updateMatrixWorld()
-
-      // Scale shadow camera to scene
       const shadowSize = Math.min(300, 100 + flight.altitude * 0.02)
       const cam = sunLight.shadow.camera as THREE.OrthographicCamera
       cam.left = -shadowSize
       cam.right = shadowSize
       cam.top = shadowSize
       cam.bottom = -shadowSize
+      cam.far = 2000
+      cam.updateProjectionMatrix()
+    } else {
+      // Tight shadow frustum on the rocket body in space
+      const cam = sunLight.shadow.camera as THREE.OrthographicCamera
+      cam.left = -60
+      cam.right = 60
+      cam.top = 60
+      cam.bottom = -60
+      cam.far = 1200
       cam.updateProjectionMatrix()
     }
 
@@ -1417,17 +1473,22 @@ export function useRenderer() {
     updateCamera(flight, visualAlt, splitMode)
 
     // ── Sun billboard + lensflare tracking ──
-    // No atmosphere in space → sun is brighter and sharper
-    const spaceFactor = Math.min(1, Math.max(0, (flight.altitude - 30000) / 70000))
+    // No atmosphere → sun gets brighter/sharper; ramp starts at ~10 km (max Q dazzle)
+    const spaceFactor = Math.min(1, Math.max(0, (flight.altitude - 10000) / 60000))
 
     if (sunBillboard) {
       sunBillboard.position.copy(camera.position).addScaledVector(sunDir, 45000)
       sunBillboard.lookAt(camera.position)
+      // Slight growth for ray room, but sun disc stays compact
+      sunBillboard.scale.setScalar(3000 + spaceFactor * 1500)
       sunBillboardMaterial.uniforms.warmth.value = sunProgress
       sunBillboardMaterial.uniforms.spaceIntensity.value = spaceFactor
+      sunBillboardMaterial.uniforms.time.value = cloudTime
     }
     if (sunLensflare) {
       sunLensflare.position.copy(camera.position).addScaledVector(sunDir, 44000)
+      // Fade out round lensflare in space — starburst shader takes over
+      sunLensflare.visible = spaceFactor < 0.8
     }
 
     // Boost sun light intensity in space (no atmospheric attenuation)
@@ -1437,12 +1498,12 @@ export function useRenderer() {
     if (bloomPass && !splitMode) {
       _camForward.set(0, 0, -1).applyQuaternion(camera.quaternion)
       const sunDot = _camForward.dot(sunDir)
-      // More bloom in space when facing sun
-      const spaceBloomBoost = spaceFactor * 0.15
+      // In space: less bloom radius to keep starburst sharp, not smeared
+      const spaceBloomBoost = spaceFactor * 0.2
       if (sunDot > 0.3) {
         const t = (sunDot - 0.3) / 0.7
-        bloomPass.strength = 0.7 + t * (0.15 + spaceBloomBoost)
-        bloomPass.threshold = 0.88 - t * (0.04 + spaceFactor * 0.06)
+        bloomPass.strength = 0.7 + t * (0.15 + spaceBloomBoost) * (1.0 - spaceFactor * 0.4)
+        bloomPass.threshold = 0.88 - t * (0.04 + spaceFactor * 0.04)
       } else {
         bloomPass.strength = 0.7
         bloomPass.threshold = 0.88
