@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { useGame } from '~/composables/useGame'
-import { useRenderer } from '~/composables/useRenderer'
-import { useAudio } from '~/composables/useAudio'
-import type { GameState } from '~/types/game'
+import { useGame } from '~/composables/prologue/useGame'
+import { useRenderer } from '~/composables/prologue/useRenderer'
+import { useAudio } from '~/composables/prologue/useAudio'
+import type { GameState } from '~/types/prologue'
+import { useGameStore } from '~/stores/game'
+import { useAchievementsStore } from '~/stores/achievements'
 
 const game = useGame()
 const renderer = useRenderer()
 const audio = useAudio()
+const gameStore = useGameStore()
+const achievementsStore = useAchievementsStore()
 
 const containerRef = ref<HTMLElement | null>(null)
 const state = ref<GameState>(game.createInitialState())
@@ -18,6 +22,7 @@ const isMuted = ref(false)
 const timeScale = ref(1)
 const ffTarget = ref<number | null>(null)
 const orbitReached = ref(false)
+const showBeginOverlay = ref(false)
 let orbitTimer: ReturnType<typeof setTimeout> | null = null
 
 // Mobile detection (synced with CSS breakpoint)
@@ -313,11 +318,24 @@ function handleAction() {
   // Detect SECO → orbit transition: play cue + delay success screen
   if (state.value.phase === 'orbit' && !orbitReached.value && !orbitTimer) {
     audio.playSeco()
+    // Unlock first orbit achievement
+    if (achievementsStore.unlock('first-orbit')) {
+      gameStore.updateKardashev(0.701)
+    }
     orbitTimer = setTimeout(() => {
       audio.playOrbitSuccess()
       orbitReached.value = true
     }, 3000)
   }
+}
+
+// Navigate to Hub — sets game start date if not already set
+function beginGame() {
+  if (!gameStore.gameStartDate) {
+    gameStore.setGameStartDate(new Date().toISOString())
+  }
+  showBeginOverlay.value = false
+  navigateTo('/hub')
 }
 
 // Keyboard input
@@ -600,7 +618,7 @@ onUnmounted(() => {
 
     <!-- Orbit success screen -->
     <Transition name="fade">
-      <div v-if="orbitReached" class="result-overlay success" @click="restart">
+      <div v-if="orbitReached" class="result-overlay success">
         <div class="result-content">
           <div class="result-title">ORBIT ACHIEVED</div>
           <div class="result-stats">
@@ -621,7 +639,10 @@ onUnmounted(() => {
               <span class="stat-value highlight">{{ state.score }}</span>
             </div>
           </div>
-          <div class="result-action">{{ isMobile ? 'TAP TO RETRY' : 'PRESS R TO RETRY' }}</div>
+          <div class="orbit-actions">
+            <button class="begin-btn" @click="beginGame">BEGIN YOUR JOURNEY</button>
+            <button class="retry-btn" @click="restart">{{ isMobile ? 'RETRY' : 'PRESS R TO RETRY' }}</button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -1187,6 +1208,49 @@ onUnmounted(() => {
   letter-spacing: 0.3em;
   color: var(--spacex-dim);
   animation: pulse-opacity 2s ease-in-out infinite;
+}
+
+.orbit-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.begin-btn {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.25em;
+  color: #000;
+  background: var(--spacex-text);
+  border: none;
+  padding: 12px 32px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: opacity 0.2s;
+}
+
+.begin-btn:hover {
+  opacity: 0.85;
+}
+
+.retry-btn {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.3em;
+  color: var(--spacex-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  animation: pulse-opacity 2s ease-in-out infinite;
+}
+
+.retry-btn:hover {
+  color: var(--spacex-text);
+  animation: none;
+  opacity: 1;
 }
 
 @keyframes pulse-opacity {

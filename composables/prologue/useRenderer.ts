@@ -7,7 +7,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { useParticles } from './useParticles'
-import type { FlightData, GameState } from '~/types/game'
+import type { FlightData, GameState } from '~/types/prologue'
 
 const EARTH_VISUAL_RADIUS = 150000
 

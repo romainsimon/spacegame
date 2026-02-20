@@ -1,0 +1,57 @@
+import type { CelestialBody } from '~/types/game'
+
+export const CELESTIAL_BODIES: CelestialBody[] = [
+  {
+    id: 'sun',
+    name: 'Sun',
+    radius: 695_700_000,
+    mu: 1.327_124_4e20,
+    soi: Infinity,
+    parent: null,
+  },
+  {
+    id: 'earth',
+    name: 'Earth',
+    radius: 6_371_000,
+    mu: 3.986_004_418e14,
+    soi: 924_000_000,
+    parent: 'sun',
+    semiMajorAxis: 149_598_023_000,
+    eccentricity: 0.0167086,
+    orbitalPeriod: 365.25 * 24 * 3600,
+    atmosphere: {
+      height: 100_000,
+      seaLevelDensity: 1.225,
+      scaleHeight: 8500,
+      seaLevelPressure: 101_325,
+    },
+  },
+  {
+    id: 'moon',
+    name: 'Moon',
+    radius: 1_737_400,
+    mu: 4.904_869_56e12,
+    soi: 66_183_000,
+    parent: 'earth',
+    semiMajorAxis: 384_400_000,
+    eccentricity: 0.0549,
+    orbitalPeriod: 27.321661 * 24 * 3600,
+  },
+  {
+    id: 'mars',
+    name: 'Mars',
+    radius: 3_389_500,
+    mu: 4.282_837e13,
+    soi: 577_000_000,
+    parent: 'sun',
+    semiMajorAxis: 227_939_366_000,
+    eccentricity: 0.0935,
+    orbitalPeriod: 686.971 * 24 * 3600,
+    atmosphere: {
+      height: 200_000,
+      seaLevelDensity: 0.020,
+      scaleHeight: 11_100,
+      seaLevelPressure: 636,
+    },
+  },
+]

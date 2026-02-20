@@ -1,11 +1,19 @@
-import type { GameState, GameEvent } from '~/types/game'
+import type { GameState, GameEvent } from '~/types/prologue'
 import { usePhysics } from './usePhysics'
 
 const COUNTDOWN_DURATION = 16 // seconds
 const MAX_Q_DISPLAY_DURATION = 3 // seconds to show MAX-Q label
 const LAUNCH_WINDOW = 10 // seconds after countdown=0 before auto-abort
 
-// Mission events timeline (Falcon 9 profile)
+// Stage 1 landing constants
+const BOOSTBACK_TRIGGER = 185     // seconds — boostback burn window center
+const BOOSTBACK_WINDOW = 5
+const ENTRY_BURN_TIME = 350       // seconds — auto entry burn
+const ENTRY_BURN_DURATION = 15    // seconds engine on
+const LANDING_ALTITUDE_TRIGGER = 3500 // meters — altitude-based landing burn trigger
+const LANDING_GOOD_VELOCITY = 3   // m/s — success threshold
+
+// Mission events timeline (Falcon 9 profile — stage 2 / main flight)
 const MISSION_EVENTS: GameEvent[] = [
   {
     id: 'max-q',
@@ -60,10 +68,12 @@ export function useGame() {
   // Track max-q display timer (not part of serializable state)
   let maxQTimer = 0
   let launchWindowTimer = 0
+  let entryBurnTimer = 0
 
   function createInitialState(): GameState {
     maxQTimer = 0
     launchWindowTimer = 0
+    entryBurnTimer = 0
     return {
       phase: 'pre-launch',
       countdown: COUNTDOWN_DURATION,
@@ -78,6 +88,8 @@ export function useGame() {
       failReason: '',
       maxAltitude: 0,
       maxSpeed: 0,
+      stage1LandingResult: null,
+      orbitAchieved: false,
     }
   }
 
@@ -93,9 +105,9 @@ export function useGame() {
         return updateFlight(state, dt)
       case 'orbit':
       case 'failed':
-        // Still update stage 1 coasting in terminal states
+        // Still update stage 1 coasting/landing in terminal states
         if (state.stage1Flight && state.stage1Flight.altitude > 0) {
-          state.stage1Flight = physics.update(state.stage1Flight, dt)
+          state = updateStage1(state, dt)
         }
         return state
     }
@@ -136,9 +148,9 @@ export function useGame() {
     // Update physics
     state.flight = physics.update(state.flight, dt)
 
-    // Update stage 1 coasting physics (after separation)
-    if (state.stage1Flight && state.stage1Flight.altitude > 0) {
-      state.stage1Flight = physics.update(state.stage1Flight, dt)
+    // Update stage 1 coasting/landing physics (after separation)
+    if (state.stage1Flight) {
+      state = updateStage1(state, dt)
     }
 
     // Track max values
@@ -192,6 +204,43 @@ export function useGame() {
     // Cut engines when stage 1 fuel runs out
     if (state.flight.stage === 1 && state.flight.fuel <= 0) {
       state.flight.throttle = 0
+    }
+
+    return state
+  }
+
+  function updateStage1(state: GameState, dt: number): GameState {
+    if (!state.stage1Flight) return state
+    const s1 = state.stage1Flight
+    const missionTime = state.flight.missionTime
+
+    // Auto entry burn at set time
+    if (missionTime >= ENTRY_BURN_TIME && missionTime < ENTRY_BURN_TIME + ENTRY_BURN_DURATION) {
+      state.stage1Flight = { ...s1, throttle: 0.33 }
+    } else if (missionTime >= ENTRY_BURN_TIME + ENTRY_BURN_DURATION && s1.throttle > 0 && s1.altitude > LANDING_ALTITUDE_TRIGGER) {
+      state.stage1Flight = { ...s1, throttle: 0 }
+    }
+
+    // Update stage 1 physics
+    if (s1.altitude > 0) {
+      state.stage1Flight = physics.update(state.stage1Flight!, dt)
+    }
+
+    // Check for landing / crash
+    if (state.stage1Flight && state.stage1Flight.altitude <= 0 && !state.stage1LandingResult) {
+      const touchdownVel = Math.abs(state.stage1Flight.velocity)
+      state.stage1LandingResult = {
+        touchdownVelocity: touchdownVel,
+        fuelRemaining: state.stage1Flight.fuel,
+        accuracy: Math.max(0, 1 - touchdownVel / 10),
+        landed: touchdownVel <= LANDING_GOOD_VELOCITY,
+      }
+      state.stage1Flight = { ...state.stage1Flight, velocity: 0, altitude: 0, throttle: 0 }
+      // Score bonus for landing
+      if (state.stage1LandingResult.landed) {
+        const stars = touchdownVel < 1 ? 5 : touchdownVel < 2 ? 4 : 3
+        state.score += stars * 20
+      }
     }
 
     return state
@@ -252,7 +301,15 @@ export function useGame() {
 
           state.flight.throttle = 0
           state.phase = 'orbit'
+          state.orbitAchieved = true
           state.activeEvent = null
+        }
+        break
+
+      case 'landing':
+        // Player triggers landing burn
+        if (state.stage1Flight && state.stage1Flight.altitude <= LANDING_ALTITUDE_TRIGGER) {
+          state.stage1Flight = { ...state.stage1Flight, throttle: 1.0 }
         }
         break
     }
@@ -290,5 +347,6 @@ export function useGame() {
     formatMissionTime,
     formatAltitude,
     formatSpeed,
+    LANDING_ALTITUDE_TRIGGER,
   }
 }

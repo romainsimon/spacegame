@@ -1,4 +1,4 @@
-import type { FlightData } from '~/types/game'
+import type { FlightData } from '~/types/prologue'
 
 interface AudioLayer {
   buffer: AudioBuffer | null

@@ -1,4 +1,4 @@
-import type { FlightData } from '~/types/game'
+import type { FlightData } from '~/types/prologue'
 
 // Constants
 const EARTH_RADIUS = 6_371_000 // meters
@@ -24,6 +24,11 @@ const CROSS_SECTION = 10.5 // m² (3.66m diameter)
 
 // Mass flow rate is constant (set by turbopump, doesn't change with altitude)
 const STAGE1_MASS_FLOW = STAGE1_THRUST / (STAGE1_ISP_SL * SURFACE_GRAVITY) // ~2749.5 kg/s
+
+// Stage 1 landing parameters (3 Merlin engines)
+const LANDING_THRUST = STAGE1_THRUST / 3  // 3 engines
+const LANDING_MASS_FLOW = STAGE1_MASS_FLOW / 3
+const LANDING_FUEL_MASS = 15_000 // kg reserved for landing burns
 
 export function usePhysics() {
   function createInitialFlightData(): FlightData {
@@ -74,6 +79,10 @@ export function usePhysics() {
         // Thrust = constant mass flow × effective ISP × g0
         thrust = STAGE1_MASS_FLOW * effectiveIsp * SURFACE_GRAVITY * f.throttle
         massFlowRate = STAGE1_MASS_FLOW * f.throttle
+      } else if (f.stage === 3) {
+        // Stage 1 landing burns (3 engines)
+        thrust = LANDING_THRUST * f.throttle
+        massFlowRate = LANDING_MASS_FLOW * f.throttle
       } else {
         thrust = STAGE2_THRUST * f.throttle
         massFlowRate = (STAGE2_THRUST * f.throttle) / (STAGE2_ISP * SURFACE_GRAVITY)
@@ -83,7 +92,9 @@ export function usePhysics() {
 
       // Fuel consumption
       const fuelBurned = massFlowRate * dt
-      const totalFuel = f.stage === 1 ? STAGE1_FUEL_MASS : STAGE2_FUEL_MASS
+      const totalFuel = f.stage === 1 ? STAGE1_FUEL_MASS
+        : f.stage === 3 ? LANDING_FUEL_MASS
+          : STAGE2_FUEL_MASS
       const currentFuelMass = f.fuel * totalFuel
       const newFuelMass = Math.max(0, currentFuelMass - fuelBurned)
       f.fuel = newFuelMass / totalFuel
@@ -128,9 +139,9 @@ export function usePhysics() {
       velocity: flight.velocity,
       acceleration: 0,
       missionTime: flight.missionTime,
-      mass: STAGE1_DRY_MASS,
-      fuel: 0,
-      stage: 1,
+      mass: STAGE1_DRY_MASS + LANDING_FUEL_MASS,
+      fuel: 1,
+      stage: 3, // stage 3 = S1 landing mode
       throttle: 0,
       dynamicPressure: 0,
       gravity: flight.gravity,
