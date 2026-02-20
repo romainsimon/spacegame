@@ -33,6 +33,7 @@ export interface FlightData {
   dynamicPressure: number   // Pa
   gravity: number           // m/s² at current altitude
   drag: number              // m/s² deceleration from drag
+  retrograde: boolean       // true during boostback (thrust opposes velocity)
 }
 
 export interface Stage1LandingResult {
@@ -57,5 +58,7 @@ export interface GameState {
   maxAltitude: number
   maxSpeed: number
   stage1LandingResult: Stage1LandingResult | null
+  stage1BoostbackEndTime: number   // mission time when boostback burn ends (0 if no boostback)
+  stage1LandingPromptShown: boolean // true when below 4000m — triggers left-panel pulse
   orbitAchieved: boolean
 }

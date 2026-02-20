@@ -41,6 +41,7 @@ const milestones = [
   { id: 'meco', label: 'MECO', time: 149 },
   { id: 'stage-sep', label: 'STAGE SEP', time: 153 },
   { id: 'ses-1', label: 'SES-1', time: 156 },
+  { id: 'boostback', label: 'BOOSTBACK', time: 185 },
   { id: 'seco', label: 'SECO', time: 480 },
 ]
 
@@ -165,6 +166,7 @@ const showPrompt = computed(() => {
   if (state.value.phase === 'pre-launch' && !started.value) return true
   if (state.value.phase === 'pre-launch' && state.value.countdown <= 0) return true
   if (state.value.activeEvent?.requiresInput) return true
+  if (state.value.stage1LandingPromptShown) return true
   return false
 })
 
@@ -173,12 +175,14 @@ const promptText = computed(() => {
     if (state.value.phase === 'pre-launch' && !audioStarted.value) return 'READY TO LAUNCH'
     if (state.value.phase === 'pre-launch' && !started.value) return 'BEGIN COUNTDOWN'
     if (state.value.phase === 'pre-launch') return 'LAUNCH'
+    if (state.value.stage1LandingPromptShown) return 'LANDING BURN'
     if (state.value.activeEvent) return state.value.activeEvent.label
     return ''
   }
   if (state.value.phase === 'pre-launch' && !audioStarted.value) return 'PRESS SPACE TO START'
   if (state.value.phase === 'pre-launch' && !started.value) return 'PRESS SPACE TO BEGIN COUNTDOWN'
   if (state.value.phase === 'pre-launch') return 'PRESS SPACE TO LAUNCH'
+  if (state.value.stage1LandingPromptShown) return 'PRESS SPACE \u2014 LANDING BURN'
   if (state.value.activeEvent) return `PRESS SPACE \u2014 ${state.value.activeEvent.label}`
   return ''
 })
@@ -211,7 +215,7 @@ function toggleFastForward() {
   audio.stopVoices()
 
   const t = missionTime.value
-  const playerInputIds = new Set(['stage-sep', 'seco'])
+  const playerInputIds = new Set(['stage-sep', 'boostback', 'seco'])
 
   for (const m of milestones) {
     if (m.time <= t + 2) continue
@@ -315,7 +319,7 @@ function handleAction() {
     audio.playStageSeparationSfx()
   }
 
-  // Detect SECO → orbit transition: play cue + delay success screen
+  // Detect SECO → orbit transition: play cue + delay success screen, then cinematic
   if (state.value.phase === 'orbit' && !orbitReached.value && !orbitTimer) {
     audio.playSeco()
     // Unlock first orbit achievement
@@ -325,6 +329,8 @@ function handleAction() {
     orbitTimer = setTimeout(() => {
       audio.playOrbitSuccess()
       orbitReached.value = true
+      // Show cinematic after 5 more seconds (or when landing resolves)
+      setTimeout(() => { showBeginOverlay.value = true }, 5000)
     }, 3000)
   }
 }
@@ -618,7 +624,7 @@ onUnmounted(() => {
 
     <!-- Orbit success screen -->
     <Transition name="fade">
-      <div v-if="orbitReached" class="result-overlay success">
+      <div v-if="orbitReached && !showBeginOverlay" class="result-overlay success">
         <div class="result-content">
           <div class="result-title">ORBIT ACHIEVED</div>
           <div class="result-stats">
@@ -639,10 +645,43 @@ onUnmounted(() => {
               <span class="stat-value highlight">{{ state.score }}</span>
             </div>
           </div>
-          <div class="orbit-actions">
-            <button class="begin-btn" @click="beginGame">BEGIN YOUR JOURNEY</button>
-            <button class="retry-btn" @click="restart">{{ isMobile ? 'RETRY' : 'PRESS R TO RETRY' }}</button>
+          <div class="result-action">
+            <span v-if="state.stage1LandingResult">
+              STAGE 1 {{ state.stage1LandingResult.landed ? 'LANDED ✓' : 'RUD ✗' }}
+            </span>
+            <span v-else>AWAITING STAGE 1 LANDING...</span>
           </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Stage 1 landing result panel (split-screen left) -->
+    <Transition name="fade">
+      <div v-if="state.stage1LandingResult && isSplitScreen" class="s1-result-panel">
+        <div v-if="state.stage1LandingResult.landed" class="s1-touchdown">TOUCHDOWN ✓</div>
+        <div v-else class="s1-rud">RUD ✗</div>
+        <div class="s1-stat">{{ state.stage1LandingResult.touchdownVelocity.toFixed(1) }} m/s</div>
+        <div class="s1-stars">{{ '★'.repeat(state.stage1LandingResult.touchdownVelocity < 1 ? 5 : state.stage1LandingResult.touchdownVelocity < 2 ? 4 : state.stage1LandingResult.touchdownVelocity < 3 ? 3 : 1) }}</div>
+      </div>
+    </Transition>
+
+    <!-- Hub cinematic overlay — shown after orbit + 5s delay -->
+    <Transition name="fade">
+      <div v-if="showBeginOverlay" class="cinematic-overlay">
+        <div class="cinematic-content">
+          <div class="cinematic-title">ORBIT ACHIEVED</div>
+          <div class="cinematic-lines">
+            <p>The Falcon 9 has delivered its payload.</p>
+            <p v-if="state.stage1LandingResult?.landed">Stage 1 has returned home.</p>
+            <p v-else>The first stage was lost at sea.</p>
+          </div>
+          <div class="cinematic-date">
+            <span class="cinematic-label">MISSION DATE RECORDED</span>
+            <span class="cinematic-value">► {{ new Date().toISOString().slice(0, 19).replace('T', '  ') }} UTC</span>
+          </div>
+          <p class="cinematic-tagline">The clock has started.<br>The solar system awaits.</p>
+          <button class="begin-btn" @click="beginGame">BEGIN</button>
+          <button class="retry-btn" @click="restart">{{ isMobile ? 'RETRY' : 'PRESS R TO RETRY' }}</button>
         </div>
       </div>
     </Transition>
@@ -1210,12 +1249,122 @@ onUnmounted(() => {
   animation: pulse-opacity 2s ease-in-out infinite;
 }
 
-.orbit-actions {
+/* === STAGE 1 RESULT PANEL === */
+.s1-result-panel {
+  position: absolute;
+  bottom: 130px;
+  left: 24px;
+  text-align: left;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.s1-touchdown {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--spacex-success);
+  margin-bottom: 4px;
+}
+
+.s1-rud {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--spacex-fail);
+  margin-bottom: 4px;
+}
+
+.s1-stat {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  color: var(--spacex-dim);
+}
+
+.s1-stars {
+  font-size: 0.75rem;
+  color: var(--spacex-accent);
+  margin-top: 2px;
+}
+
+/* === HUB CINEMATIC OVERLAY === */
+.cinematic-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(4px);
+}
+
+.cinematic-content {
+  max-width: 480px;
+  width: 90%;
+  text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
+  gap: 16px;
+}
+
+.cinematic-title {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: 0.4em;
+  color: var(--spacex-text);
+  margin-bottom: 8px;
+}
+
+.cinematic-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cinematic-lines p {
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  color: var(--spacex-dim);
+  margin: 0;
+  letter-spacing: 0.05em;
+}
+
+.cinematic-date {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 24px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  width: 100%;
+}
+
+.cinematic-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.25em;
+  color: var(--spacex-dim);
+}
+
+.cinematic-value {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--spacex-text);
+}
+
+.cinematic-tagline {
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  color: var(--spacex-dim);
+  margin: 0;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
 }
 
 .begin-btn {
@@ -1226,10 +1375,11 @@ onUnmounted(() => {
   color: #000;
   background: var(--spacex-text);
   border: none;
-  padding: 12px 32px;
+  padding: 14px 40px;
   cursor: pointer;
   border-radius: 2px;
   transition: opacity 0.2s;
+  margin-top: 8px;
 }
 
 .begin-btn:hover {

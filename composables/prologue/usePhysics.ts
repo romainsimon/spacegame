@@ -44,6 +44,7 @@ export function usePhysics() {
       dynamicPressure: 0,
       gravity: SURFACE_GRAVITY,
       drag: 0,
+      retrograde: false,
     }
   }
 
@@ -101,8 +102,9 @@ export function usePhysics() {
       f.mass -= fuelBurned
     }
 
-    // Total acceleration (thrust up, gravity down, drag opposes velocity)
-    f.acceleration = thrustAccel - f.gravity - (f.velocity > 0 ? f.drag : -f.drag)
+    // Total acceleration — retrograde flips thrust direction (boostback)
+    const thrustDir = f.retrograde ? -1 : 1
+    f.acceleration = thrustDir * thrustAccel - f.gravity - (f.velocity > 0 ? f.drag : -f.drag)
 
     // Integration
     f.velocity += f.acceleration * dt
@@ -146,6 +148,7 @@ export function usePhysics() {
       dynamicPressure: 0,
       gravity: flight.gravity,
       drag: 0,
+      retrograde: false,
     }
   }
 

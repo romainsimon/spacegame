@@ -52,6 +52,15 @@ const MISSION_EVENTS: GameEvent[] = [
     requiresInput: false,
   },
   {
+    id: 'boostback',
+    label: 'BOOSTBACK BURN',
+    triggerTime: BOOSTBACK_TRIGGER,
+    windowSize: BOOSTBACK_WINDOW,
+    phase: 'boostback',
+    nextPhase: 'stage2-flight',
+    requiresInput: true,
+  },
+  {
     id: 'seco-1',
     label: 'SECO-1',
     triggerTime: 480,
@@ -89,6 +98,8 @@ export function useGame() {
       maxAltitude: 0,
       maxSpeed: 0,
       stage1LandingResult: null,
+      stage1BoostbackEndTime: 0,
+      stage1LandingPromptShown: false,
       orbitAchieved: false,
     }
   }
@@ -101,6 +112,7 @@ export function useGame() {
       case 'max-q':
       case 'stage-sep':
       case 'stage2-flight':
+      case 'boostback':
       case 'seco':
         return updateFlight(state, dt)
       case 'orbit':
@@ -192,11 +204,17 @@ export function useGame() {
           // Update phase for the event
           state.phase = event.phase
         } else if (missionTime > windowEnd) {
-          // Missed the window
-          state.phase = 'failed'
-          state.failReason = `Missed ${event.label} window`
-          state.activeEvent = null
-          state.flight.throttle = 0
+          // Missed the window — boostback is optional (mission continues), others fail
+          if (event.id === 'boostback') {
+            state.phase = 'stage2-flight'
+            state.activeEvent = null
+            state.currentEventIndex++
+          } else {
+            state.phase = 'failed'
+            state.failReason = `Missed ${event.label} window`
+            state.activeEvent = null
+            state.flight.throttle = 0
+          }
         }
       }
     }
@@ -214,15 +232,31 @@ export function useGame() {
     const s1 = state.stage1Flight
     const missionTime = state.flight.missionTime
 
+    // Boostback retrograde burn (player-triggered, tracked via boostbackEndTime)
+    if (state.stage1BoostbackEndTime > 0 && missionTime < state.stage1BoostbackEndTime) {
+      state.stage1Flight = { ...s1, throttle: 0.33, retrograde: true }
+    } else if (state.stage1BoostbackEndTime > 0 && missionTime >= state.stage1BoostbackEndTime && s1.retrograde) {
+      state.stage1Flight = { ...s1, throttle: 0, retrograde: false }
+    }
+
     // Auto entry burn at set time
-    if (missionTime >= ENTRY_BURN_TIME && missionTime < ENTRY_BURN_TIME + ENTRY_BURN_DURATION) {
-      state.stage1Flight = { ...s1, throttle: 0.33 }
-    } else if (missionTime >= ENTRY_BURN_TIME + ENTRY_BURN_DURATION && s1.throttle > 0 && s1.altitude > LANDING_ALTITUDE_TRIGGER) {
-      state.stage1Flight = { ...s1, throttle: 0 }
+    if (!s1.retrograde) {
+      const entryBurnActive = missionTime >= ENTRY_BURN_TIME && missionTime < ENTRY_BURN_TIME + ENTRY_BURN_DURATION
+      const entryBurnJustEnded = missionTime >= ENTRY_BURN_TIME + ENTRY_BURN_DURATION && s1.throttle > 0 && s1.altitude > LANDING_ALTITUDE_TRIGGER
+      if (entryBurnActive && !s1.retrograde) {
+        state.stage1Flight = { ...state.stage1Flight!, throttle: 0.33 }
+      } else if (entryBurnJustEnded) {
+        state.stage1Flight = { ...state.stage1Flight!, throttle: 0 }
+      }
+    }
+
+    // Show landing prompt when below 4000m (altitude-based trigger)
+    if (state.stage1Flight!.altitude < 4000 && state.stage1Flight!.altitude > 0 && !state.stage1LandingResult && state.stage1Flight!.throttle === 0) {
+      state.stage1LandingPromptShown = true
     }
 
     // Update stage 1 physics
-    if (s1.altitude > 0) {
+    if (state.stage1Flight!.altitude > 0) {
       state.stage1Flight = physics.update(state.stage1Flight!, dt)
     }
 
@@ -235,7 +269,8 @@ export function useGame() {
         accuracy: Math.max(0, 1 - touchdownVel / 10),
         landed: touchdownVel <= LANDING_GOOD_VELOCITY,
       }
-      state.stage1Flight = { ...state.stage1Flight, velocity: 0, altitude: 0, throttle: 0 }
+      state.stage1Flight = { ...state.stage1Flight, velocity: 0, altitude: 0, throttle: 0, retrograde: false }
+      state.stage1LandingPromptShown = false
       // Score bonus for landing
       if (state.stage1LandingResult.landed) {
         const stars = touchdownVel < 1 ? 5 : touchdownVel < 2 ? 4 : 3
@@ -266,6 +301,13 @@ export function useGame() {
   function handlePlayerAction(state: GameState): { state: GameState; separated: boolean } {
     let separated = false
 
+    // Stage 1 landing burn — triggers whenever landing prompt is showing, regardless of main phase
+    if (state.stage1LandingPromptShown && state.stage1Flight && state.stage1Flight.altitude <= LANDING_ALTITUDE_TRIGGER && state.stage1Flight.throttle === 0) {
+      state.stage1Flight = { ...state.stage1Flight, throttle: 1.0, retrograde: false }
+      state.stage1LandingPromptShown = false
+      return { state, separated }
+    }
+
     switch (state.phase) {
       case 'pre-launch':
         if (state.countdown <= 0) {
@@ -293,6 +335,17 @@ export function useGame() {
         }
         break
 
+      case 'boostback':
+        if (state.activeEvent?.id === 'boostback' && state.stage1Flight) {
+          // Trigger retrograde burn for 25 seconds from current mission time
+          state.stage1BoostbackEndTime = state.flight.missionTime + 25
+          state.stage1Flight = { ...state.stage1Flight, retrograde: true, throttle: 0.33 }
+          state.phase = 'stage2-flight'
+          state.activeEvent = null
+          state.currentEventIndex++
+        }
+        break
+
       case 'seco':
         if (state.activeEvent?.id === 'seco-1') {
           const timeDiff = Math.abs(state.flight.missionTime - state.activeEvent.triggerTime)
@@ -306,12 +359,6 @@ export function useGame() {
         }
         break
 
-      case 'landing':
-        // Player triggers landing burn
-        if (state.stage1Flight && state.stage1Flight.altitude <= LANDING_ALTITUDE_TRIGGER) {
-          state.stage1Flight = { ...state.stage1Flight, throttle: 1.0 }
-        }
-        break
     }
 
     return { state, separated }
