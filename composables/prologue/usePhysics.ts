@@ -28,7 +28,7 @@ const STAGE1_MASS_FLOW = STAGE1_THRUST / (STAGE1_ISP_SL * SURFACE_GRAVITY) // ~2
 // Stage 1 landing parameters (3 Merlin engines)
 const LANDING_THRUST = STAGE1_THRUST / 3  // 3 engines
 const LANDING_MASS_FLOW = STAGE1_MASS_FLOW / 3
-const LANDING_FUEL_MASS = 15_000 // kg reserved for landing burns
+const LANDING_FUEL_MASS = 55_000 // kg reserved for boostback + entry + landing burns
 
 export function usePhysics() {
   function createInitialFlightData(): FlightData {

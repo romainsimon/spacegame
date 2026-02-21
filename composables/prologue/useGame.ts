@@ -7,11 +7,13 @@ const LAUNCH_WINDOW = 10 // seconds after countdown=0 before auto-abort
 
 // Stage 1 landing constants
 const BOOSTBACK_TRIGGER = 185     // seconds — boostback burn window center
-const BOOSTBACK_WINDOW = 5
+const BOOSTBACK_WINDOW = 8        // ±8s window (easier to hit)
+const BOOSTBACK_DURATION = 35     // seconds of full-thrust retrograde burn
 const ENTRY_BURN_TIME = 350       // seconds — auto entry burn
 const ENTRY_BURN_DURATION = 15    // seconds engine on
 const LANDING_ALTITUDE_TRIGGER = 3500 // meters — altitude-based landing burn trigger
 const LANDING_GOOD_VELOCITY = 3   // m/s — success threshold
+const LANDING_CUT_VELOCITY = -5   // m/s — auto-cut engine when nearly stopped
 
 // Mission events timeline (Falcon 9 profile — stage 2 / main flight)
 const MISSION_EVENTS: GameEvent[] = [
@@ -55,7 +57,7 @@ const MISSION_EVENTS: GameEvent[] = [
     id: 'boostback',
     label: 'BOOSTBACK BURN',
     triggerTime: BOOSTBACK_TRIGGER,
-    windowSize: BOOSTBACK_WINDOW,
+    windowSize: BOOSTBACK_WINDOW, // ±8s
     phase: 'boostback',
     nextPhase: 'stage2-flight',
     requiresInput: true,
@@ -232,9 +234,9 @@ export function useGame() {
     const s1 = state.stage1Flight
     const missionTime = state.flight.missionTime
 
-    // Boostback retrograde burn (player-triggered, tracked via boostbackEndTime)
+    // Boostback retrograde burn (player-triggered, full 3-engine thrust)
     if (state.stage1BoostbackEndTime > 0 && missionTime < state.stage1BoostbackEndTime) {
-      state.stage1Flight = { ...s1, throttle: 0.33, retrograde: true }
+      state.stage1Flight = { ...s1, throttle: 1.0, retrograde: true }
     } else if (state.stage1BoostbackEndTime > 0 && missionTime >= state.stage1BoostbackEndTime && s1.retrograde) {
       state.stage1Flight = { ...s1, throttle: 0, retrograde: false }
     }
@@ -253,6 +255,12 @@ export function useGame() {
     // Show landing prompt when below 4000m (altitude-based trigger)
     if (state.stage1Flight!.altitude < 4000 && state.stage1Flight!.altitude > 0 && !state.stage1LandingResult && state.stage1Flight!.throttle === 0) {
       state.stage1LandingPromptShown = true
+    }
+
+    // Auto-cut landing engine when nearly stopped (prevents overshoot and hover)
+    const s1updated = state.stage1Flight!
+    if (s1updated.throttle > 0 && !s1updated.retrograde && s1updated.velocity >= LANDING_CUT_VELOCITY) {
+      state.stage1Flight = { ...s1updated, throttle: 0 }
     }
 
     // Update stage 1 physics
@@ -337,9 +345,9 @@ export function useGame() {
 
       case 'boostback':
         if (state.activeEvent?.id === 'boostback' && state.stage1Flight) {
-          // Trigger retrograde burn for 25 seconds from current mission time
-          state.stage1BoostbackEndTime = state.flight.missionTime + 25
-          state.stage1Flight = { ...state.stage1Flight, retrograde: true, throttle: 0.33 }
+          // Full 3-engine retrograde burn to reverse trajectory
+          state.stage1BoostbackEndTime = state.flight.missionTime + BOOSTBACK_DURATION
+          state.stage1Flight = { ...state.stage1Flight, retrograde: true, throttle: 1.0 }
           state.phase = 'stage2-flight'
           state.activeEvent = null
           state.currentEventIndex++
