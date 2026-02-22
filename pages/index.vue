@@ -24,6 +24,7 @@ const ffTarget = ref<number | null>(null)
 const orbitReached = ref(false)
 const showBeginOverlay = ref(false)
 let orbitTimer: ReturnType<typeof setTimeout> | null = null
+let stopS1Watcher: (() => void) | null = null
 
 // Mobile detection (synced with CSS breakpoint)
 const isMobile = ref(false)
@@ -329,8 +330,18 @@ function handleAction() {
     orbitTimer = setTimeout(() => {
       audio.playOrbitSuccess()
       orbitReached.value = true
-      // Show cinematic after 5 more seconds (or when landing resolves)
-      setTimeout(() => { showBeginOverlay.value = true }, 5000)
+      // Wait for stage 1 landing result before showing cinematic
+      if (!state.value.stage1Flight) {
+        setTimeout(() => { showBeginOverlay.value = true }, 5000)
+      } else {
+        stopS1Watcher = watch(() => state.value.stage1LandingResult, (result) => {
+          if (result) {
+            stopS1Watcher?.()
+            stopS1Watcher = null
+            setTimeout(() => { showBeginOverlay.value = true }, 3000)
+          }
+        })
+      }
     }, 3000)
   }
 }
@@ -363,12 +374,15 @@ function onKeyDown(event: KeyboardEvent) {
 }
 
 function restart() {
+  stopS1Watcher?.()
+  stopS1Watcher = null
   state.value = game.createInitialState()
   lastTime.value = 0
   started.value = false
   timeScale.value = 1
   ffTarget.value = null
   orbitReached.value = false
+  showBeginOverlay.value = false
   if (orbitTimer) { clearTimeout(orbitTimer); orbitTimer = null }
   audio.resetCues()
 }
@@ -391,6 +405,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   isInitialized.value = false
+  stopS1Watcher?.()
+  stopS1Watcher = null
   if (orbitTimer) { clearTimeout(orbitTimer); orbitTimer = null }
   window.removeEventListener('resize', checkMobile)
   window.removeEventListener('keydown', onKeyDown)
@@ -1120,7 +1136,7 @@ onUnmounted(() => {
   left: 50%;
   transform: translateX(-50%);
   text-align: center;
-  z-index: 15;
+  z-index: 60;
   cursor: pointer;
 }
 

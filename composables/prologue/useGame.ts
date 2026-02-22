@@ -11,9 +11,8 @@ const BOOSTBACK_WINDOW = 8        // ±8s window (easier to hit)
 const BOOSTBACK_DURATION = 35     // seconds of full-thrust retrograde burn
 const ENTRY_BURN_TIME = 350       // seconds — auto entry burn
 const ENTRY_BURN_DURATION = 15    // seconds engine on
-const LANDING_ALTITUDE_TRIGGER = 3500 // meters — altitude-based landing burn trigger
-const LANDING_GOOD_VELOCITY = 3   // m/s — success threshold
-const LANDING_CUT_VELOCITY = -5   // m/s — auto-cut engine when nearly stopped
+const LANDING_ALTITUDE_TRIGGER = 10_000 // meters — show landing prompt at 10km
+const LANDING_GOOD_VELOCITY = 5   // m/s — success threshold
 
 // Mission events timeline (Falcon 9 profile — stage 2 / main flight)
 const MISSION_EVENTS: GameEvent[] = [
@@ -252,15 +251,9 @@ export function useGame() {
       }
     }
 
-    // Show landing prompt when below 4000m (altitude-based trigger)
-    if (state.stage1Flight!.altitude < 4000 && state.stage1Flight!.altitude > 0 && !state.stage1LandingResult && state.stage1Flight!.throttle === 0) {
+    // Show landing prompt when below 10km and not burning (gives player time to react)
+    if (state.stage1Flight!.altitude < LANDING_ALTITUDE_TRIGGER && state.stage1Flight!.altitude > 0 && !state.stage1LandingResult && state.stage1Flight!.throttle === 0) {
       state.stage1LandingPromptShown = true
-    }
-
-    // Auto-cut landing engine when nearly stopped (prevents overshoot and hover)
-    const s1updated = state.stage1Flight!
-    if (s1updated.throttle > 0 && !s1updated.retrograde && s1updated.velocity >= LANDING_CUT_VELOCITY) {
-      state.stage1Flight = { ...s1updated, throttle: 0 }
     }
 
     // Update stage 1 physics
@@ -268,20 +261,33 @@ export function useGame() {
       state.stage1Flight = physics.update(state.stage1Flight!, dt)
     }
 
-    // Check for landing / crash
+    // Hover-landing: engine brought Stage 1 to a stop above the ground → touchdown
+    if (state.stage1Flight && state.stage1Flight.throttle > 0 && !state.stage1Flight.retrograde && state.stage1Flight.velocity >= 0 && !state.stage1LandingResult) {
+      state.stage1LandingResult = {
+        touchdownVelocity: 0,
+        fuelRemaining: state.stage1Flight.fuel,
+        accuracy: 1.0,
+        landed: true,
+      }
+      state.stage1Flight = { ...state.stage1Flight, velocity: 0, altitude: 0, throttle: 0, retrograde: false }
+      state.stage1LandingPromptShown = false
+      state.score += 100
+    }
+
+    // Check for ground impact / crash
     if (state.stage1Flight && state.stage1Flight.altitude <= 0 && !state.stage1LandingResult) {
       const touchdownVel = Math.abs(state.stage1Flight.velocity)
       state.stage1LandingResult = {
         touchdownVelocity: touchdownVel,
         fuelRemaining: state.stage1Flight.fuel,
-        accuracy: Math.max(0, 1 - touchdownVel / 10),
+        accuracy: Math.max(0, 1 - touchdownVel / 50),
         landed: touchdownVel <= LANDING_GOOD_VELOCITY,
       }
       state.stage1Flight = { ...state.stage1Flight, velocity: 0, altitude: 0, throttle: 0, retrograde: false }
       state.stage1LandingPromptShown = false
       // Score bonus for landing
       if (state.stage1LandingResult.landed) {
-        const stars = touchdownVel < 1 ? 5 : touchdownVel < 2 ? 4 : 3
+        const stars = touchdownVel < 1 ? 5 : touchdownVel < 3 ? 4 : 3
         state.score += stars * 20
       }
     }
